@@ -1,36 +1,104 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# 🤖 AI Roleplay Chat App
 
-## Getting Started
+Aplikasi chat interaktif berbasis AI yang memungkinkan pengguna untuk berinteraksi dengan berbagai karakter AI dengan persona yang unik. Dibangun menggunakan **Next.js**, **Prisma**, dan **AI SDK**.
 
-First, run the development server:
+## 🚀 Fitur Utama
+- **Persona Karakter**: Chat dengan karakter yang memiliki kepribadian unik.
+- **Streaming Response**: Respon AI yang muncul secara real-time.
+- **Persistent Chat**: Riwayat percakapan tersimpan dengan aman di database.
+- **Multi-Model Support**: Integrasi dengan Gemini, Novita AI, dan Custom Colab Backend.
 
+---
+
+## 🛠️ Prasyarat
+Pastikan Anda sudah menginstal perangkat lunak berikut:
+- **Node.js** (v18 atau lebih baru)
+- **npm** atau **yarn**
+- **MariaDB** atau **MySQL** (untuk database)
+
+---
+
+## 📥 Instalasi
+
+Ikuti langkah-langkah berikut untuk menjalankan project di lokal:
+
+### 1. Clone Repository
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+git clone <repository-url>
+cd chat
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+### 2. Instal Dependensi
+```bash
+npm install
+```
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+### 3. Konfigurasi Environment
+Salin file `.env.example` menjadi `.env` dan lengkapi API Key yang dibutuhkan:
+```bash
+cp .env.example .env
+```
+Edit file `.env`:
+- `DATABASE_URL`: Sesuaikan dengan kredensial database lokal Anda.
+- `GEMINI_API_KEY`: Masukkan API Key dari Google AI Studio.
+- `NOVITA_API_KEY`: Masukkan API Key dari Novita AI.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+### 4. Setup Database
+Pastikan database dengan nama `ai_roleplay_db` sudah dibuat di MariaDB/MySQL Anda, lalu jalankan migrasi Prisma:
+```bash
+npx prisma migrate dev --name init
+```
 
-## Learn More
+(Opsional) Isi database dengan data awal (karakter):
+```bash
+npx prisma db seed
+```
 
-To learn more about Next.js, take a look at the following resources:
+### 5. Jalankan Aplikasi
+```bash
+npm run dev
+```
+Buka [http://localhost:3000](http://localhost:3000) di browser Anda.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+---
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## 📱 Menjalankan di Device Lain (Akses Jaringan)
 
-## Deploy on Vercel
+Untuk mengakses aplikasi ini dari smartphone atau laptop lain dalam satu jaringan WiFi:
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+### 1. Jalankan Server dengan Host Flag
+Secara default, Next.js hanya menerima koneksi dari `localhost`. Untuk membuka akses ke jaringan, jalankan dengan:
+```bash
+npm run dev -- -H 0.0.0.0
+```
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+### 2. Cek IP Lokal Komputer Anda
+Di Windows (Command Prompt):
+```cmd
+ipconfig
+```
+Cari bagian **IPv4 Address**, contoh: `192.168.1.15`.
+
+### 3. Akses dari Device Lain
+Di browser smartphone/laptop lain, masukkan alamat IP tersebut dengan port 3000:
+`http://192.168.1.15:3000`
+
+> [!TIP]
+> Pastikan firewall di komputer Anda memberikan izin akses untuk Node.js atau port 3000.
+
+---
+
+## 🏗️ Struktur Project
+- `/app`: Routing dan UI Next.js (App Router).
+- `/prisma`: Schema database dan file migrasi.
+- `/lib`: Utilitas dan konfigurasi shared (Prisma client, AI setup).
+- `/public`: Aset statis seperti gambar dan icon.
+
+---
+
+## 📄 Lisensi
+Project ini dibuat untuk keperluan pengembangan dan pembelajaran.
+
+---
+*Dibuat dengan ❤️ oleh Antigravity.*
+

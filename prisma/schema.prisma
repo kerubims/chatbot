@@ -1,0 +1,41 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Get a free hosted Postgres database in seconds: `npx create-db`
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+}
+
+model Character {
+  id          String        @id @default(uuid())
+  name        String
+  avatar_url  String?
+  persona     String        @db.Text
+  greeting    String        @db.Text
+  sessions    ChatSession[]
+  created_at  DateTime      @default(now())
+  updated_at  DateTime      @updatedAt
+}
+
+model ChatSession {
+  id           String    @id @default(uuid())
+  character_id String
+  character    Character @relation(fields: [character_id], references: [id], onDelete: Cascade)
+  title        String
+  messages     Message[]
+  created_at   DateTime  @default(now())
+}
+
+model Message {
+  id         String      @id @default(uuid())
+  session_id String
+  session    ChatSession @relation(fields: [session_id], references: [id], onDelete: Cascade)
+  role       String      // 'user', 'assistant', 'system'
+  content    String      @db.Text
+  created_at DateTime    @default(now())
+}
