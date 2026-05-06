@@ -69,13 +69,22 @@ export default function CharactersPage() {
             Create and manage your AI characters
           </p>
         </div>
-        <Link
-          href="/characters/new"
-          className="btn-primary"
-          style={{ textDecoration: "none" }}
-        >
-          <span>+ New Character</span>
-        </Link>
+        <div className="flex items-center gap-3">
+          <Link
+            href="/profile"
+            className="btn-secondary"
+            style={{ textDecoration: "none" }}
+          >
+            👤 Profile
+          </Link>
+          <Link
+            href="/characters/new"
+            className="btn-primary"
+            style={{ textDecoration: "none" }}
+          >
+            <span>+ New Character</span>
+          </Link>
+        </div>
       </div>
 
       {/* Grid */}

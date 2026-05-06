@@ -15,8 +15,6 @@ interface SessionSidebarProps {
   characterName: string;
   temperature: number;
   setTemperature: (v: number) => void;
-  maxTokens: number;
-  setMaxTokens: (v: number) => void;
 }
 
 export default function SessionSidebar({
@@ -28,8 +26,6 @@ export default function SessionSidebar({
   characterName,
   temperature,
   setTemperature,
-  maxTokens,
-  setMaxTokens,
 }: SessionSidebarProps) {
   return (
     <div
@@ -133,26 +129,6 @@ export default function SessionSidebar({
             step="0.1"
             value={temperature ?? 0.8}
             onChange={(e) => setTemperature(parseFloat(e.target.value))}
-            className="w-full accent-[var(--accent-primary)] h-1 bg-[var(--bg-card)] rounded-lg appearance-none cursor-pointer"
-          />
-        </div>
-
-        <div className="flex flex-col gap-1.5">
-          <div className="flex justify-between items-center">
-            <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)]">
-              Response Length
-            </label>
-            <span className="text-[10px] font-mono text-[var(--accent-primary)]">
-              {maxTokens}
-            </span>
-          </div>
-          <input
-            type="range"
-            min="50"
-            max="1024"
-            step="10"
-            value={maxTokens ?? 300}
-            onChange={(e) => setMaxTokens(parseInt(e.target.value))}
             className="w-full accent-[var(--accent-primary)] h-1 bg-[var(--bg-card)] rounded-lg appearance-none cursor-pointer"
           />
         </div>

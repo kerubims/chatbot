@@ -38,11 +38,33 @@ export async function PUT(
   const { id } = await params;
   try {
     const body = await req.json();
-    const { name, avatar_url, persona, greeting } = body;
+    const {
+      name,
+      avatar_url,
+      persona,
+      greeting,
+      gender,
+      backstory,
+      key_memories,
+      scenario,
+      response_directives,
+      example_dialogue,
+    } = body;
 
     const character = await prisma.character.update({
       where: { id },
-      data: { name, avatar_url, persona, greeting },
+      data: {
+        name,
+        avatar_url: avatar_url || null,
+        persona: persona || backstory || "",
+        greeting,
+        gender: gender || "Not specified",
+        backstory: backstory || persona || "",
+        key_memories: key_memories || "",
+        scenario: scenario || "",
+        response_directives: response_directives || "",
+        example_dialogue: example_dialogue || "",
+      },
     });
 
     return NextResponse.json(character);

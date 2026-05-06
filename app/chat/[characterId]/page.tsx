@@ -45,7 +45,6 @@ export default function ChatPage({
   
   // Settings
   const [temperature, setTemperature] = useState(0.8);
-  const [maxTokens, setMaxTokens] = useState(300);
 
   // Scroll to bottom
   const scrollToBottom = useCallback(() => {
@@ -172,7 +171,6 @@ export default function ChatPage({
           characterId,
           sessionId: activeSessionId,
           temperature,
-          maxTokens,
         }),
       });
 
@@ -244,8 +242,6 @@ export default function ChatPage({
         characterName={character.name}
         temperature={temperature}
         setTemperature={setTemperature}
-        maxTokens={maxTokens}
-        setMaxTokens={setMaxTokens}
       />
 
       {/* Chat Area */}

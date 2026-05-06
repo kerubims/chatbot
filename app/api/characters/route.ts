@@ -24,17 +24,39 @@ export async function GET() {
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    const { name, avatar_url, persona, greeting } = body;
+    const {
+      name,
+      avatar_url,
+      persona,
+      greeting,
+      gender,
+      backstory,
+      key_memories,
+      scenario,
+      response_directives,
+      example_dialogue,
+    } = body;
 
-    if (!name || !persona || !greeting) {
+    if (!name || !greeting) {
       return NextResponse.json(
-        { error: "Name, persona, and greeting are required" },
+        { error: "Name and greeting are required" },
         { status: 400 }
       );
     }
 
     const character = await prisma.character.create({
-      data: { name, avatar_url, persona, greeting },
+      data: {
+        name,
+        avatar_url: avatar_url || null,
+        persona: persona || backstory || "",
+        greeting,
+        gender: gender || "Not specified",
+        backstory: backstory || persona || "",
+        key_memories: key_memories || "",
+        scenario: scenario || "",
+        response_directives: response_directives || "",
+        example_dialogue: example_dialogue || "",
+      },
     });
 
     return NextResponse.json(character, { status: 201 });

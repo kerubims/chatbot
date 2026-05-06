@@ -3,17 +3,18 @@ import { UIMessage } from "ai";
 
 export const maxDuration = 60;
 
+const SINGLETON_USER_ID = "default-user";
+
 export async function POST(req: Request) {
   try {
-    const { messages, sessionId, characterId, temperature, maxTokens } = (await req.json()) as {
+    const { messages, sessionId, characterId, temperature } = (await req.json()) as {
       messages: UIMessage[];
       sessionId: string;
       characterId: string;
       temperature?: number;
-      maxTokens?: number;
     };
 
-    // 1. Ambil persona karakter dari database
+    // 1. Fetch character data
     const character = await prisma.character.findUnique({
       where: { id: characterId },
     });
@@ -22,12 +23,77 @@ export async function POST(req: Request) {
       return new Response("Character not found", { status: 404 });
     }
 
-    // Ambil pesan user terakhir
+    // 2. Fetch user profile
+    const userProfile = await prisma.userProfile.findUnique({
+      where: { id: SINGLETON_USER_ID },
+    });
+
+    // 3. Build the enriched multi-layer system prompt (Kindroid-style)
+    const systemPromptParts: string[] = [];
+
+    // --- Character Identity ---
+    systemPromptParts.push(`You are ${character.name}.`);
+    if (character.gender && character.gender !== "Not specified") {
+      systemPromptParts.push(`Your gender is ${character.gender}.`);
+    }
+
+    // --- Backstory (core personality + history) ---
+    if (character.backstory) {
+      systemPromptParts.push(`\n[Backstory]\n${character.backstory}`);
+    } else if (character.persona) {
+      // Fallback to old persona field
+      systemPromptParts.push(`\n[Backstory]\n${character.persona}`);
+    }
+
+    // --- Key Memories ---
+    if (character.key_memories) {
+      systemPromptParts.push(`\n[Key Memories]\n${character.key_memories}`);
+    }
+
+    // --- Current Scenario ---
+    if (character.scenario) {
+      systemPromptParts.push(`\n[Current Scenario]\n${character.scenario}`);
+    }
+
+    // --- Response Directives ---
+    if (character.response_directives) {
+      systemPromptParts.push(`\n[Response Directives]\n${character.response_directives}`);
+    }
+
+    // --- Example Dialogue ---
+    if (character.example_dialogue) {
+      systemPromptParts.push(`\n[Example Dialogue]\n${character.example_dialogue}`);
+    }
+
+    // --- User Profile Info ---
+    if (userProfile) {
+      const userInfoParts: string[] = [];
+      if (userProfile.display_name && userProfile.display_name !== "User") {
+        userInfoParts.push(`The user's name is ${userProfile.display_name}.`);
+      }
+      if (userProfile.gender && userProfile.gender !== "Not specified") {
+        userInfoParts.push(`The user's gender is ${userProfile.gender}.`);
+      }
+      if (userProfile.persona) {
+        userInfoParts.push(`About the user: ${userProfile.persona}`);
+      }
+      if (userInfoParts.length > 0) {
+        systemPromptParts.push(`\n[User Information]\n${userInfoParts.join(" ")}`);
+      }
+
+      // --- Global Response Style (from user preferences) ---
+      if (userProfile.response_style) {
+        systemPromptParts.push(`\n[Global Response Style]\n${userProfile.response_style}`);
+      }
+    }
+
+    const systemPrompt = systemPromptParts.join("\n");
+
+    // 4. Save user message to DB
     const lastUserMessage = messages.filter((m) => m.role === "user").pop();
 
-    // Simpan pesan user ke DB
     if (lastUserMessage) {
-      const text = lastUserMessage.content || 
+      const text = (lastUserMessage as any).content || 
         (lastUserMessage.parts?.find((p: any) => p.type === "text") as any)?.text;
         
       if (text) {
@@ -41,40 +107,37 @@ export async function POST(req: Request) {
       }
     }
 
-    // Ambil maksimal 20 history pesan terakhir dari DB
+    // 5. Fetch last 20 messages from DB for context
     const dbMessages = await prisma.message.findMany({
       where: { session_id: sessionId },
       orderBy: { created_at: "asc" },
       take: 20,
     });
 
-    // Format ulang pesan agar sesuai dengan format yang diminta FastAPI Colab
     const contextMessages = dbMessages.map((msg) => ({
       role: msg.role === "user" ? "user" : "assistant",
       content: msg.content,
     }));
 
-    // 2. Hubungi endpoint Google Colab
-    // Pastikan Anda sudah menyimpan link ngrok di file .env dengan nama COLAB_API_URL
+    // 6. Send to Colab LLM
     const colabUrl = process.env.COLAB_API_URL;
     if (!colabUrl) {
       throw new Error("COLAB_API_URL belum disetel di .env");
     }
 
     const payload = {
-      // 3. Masukkan aturan/persona ke system_prompt
-      system_prompt: character.persona, 
+      system_prompt: systemPrompt,
       messages: contextMessages,
-      max_tokens: maxTokens || 500,
-      temperature: temperature || 0.8
+      max_tokens: 1000,
+      temperature: temperature || 0.8,
     };
 
     const res = await fetch(`${colabUrl}/chat`, {
       method: "POST",
       headers: {
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
       },
-      body: JSON.stringify(payload)
+      body: JSON.stringify(payload),
     });
 
     if (!res.ok) {
@@ -85,7 +148,7 @@ export async function POST(req: Request) {
     const data = await res.json();
     const reply = data.reply;
 
-    // Simpan balasan AI ke database
+    // 7. Save AI reply to DB
     if (reply) {
       await prisma.message.create({
         data: {
@@ -96,15 +159,13 @@ export async function POST(req: Request) {
       });
     }
 
-    // 4. Kembalikan balasan ke frontend Vercel AI SDK
-    // Kembalikan teks mentah agar useChat menangani sebagai plain text stream
+    // 8. Return plain text response
     return new Response(reply, {
       status: 200,
     });
 
   } catch (error: any) {
     console.error("Chat API error:", error);
-    require('fs').writeFileSync('scratch_error.txt', String(error?.stack || error));
     return new Response(error.message || "Internal server error", { status: 500 });
   }
 }

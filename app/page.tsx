@@ -32,6 +32,19 @@ export default function Home() {
         >
           <span>Enter Character Hub →</span>
         </Link>
+        <div className="mt-4">
+          <Link
+            href="/profile"
+            className="text-sm"
+            style={{
+              color: "var(--text-muted)",
+              textDecoration: "none",
+              transition: "color 0.2s",
+            }}
+          >
+            👤 Edit Your Profile
+          </Link>
+        </div>
       </div>
     </main>
   );
