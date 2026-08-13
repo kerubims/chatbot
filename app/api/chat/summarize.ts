@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { DEFAULT_MODEL, NOVITA_SERVERLESS_BASE_URL } from "@/lib/novita";
 
 export async function generateAutoSummary(
   sessionId: string,
@@ -31,30 +32,38 @@ Focus on:
 ${existingSummary ? `[Previous Summary Context]\n${existingSummary}\n\n` : ""}
 Write in third person, past tense. Be concise but capture the essence. Do not include meta-commentary, just the summary.`;
 
-    const colabUrl = process.env.COLAB_API_URL;
-    if (!colabUrl) throw new Error("COLAB_API_URL not set");
+    const novitaKey = process.env.NOVITA_API_KEY;
+    if (!novitaKey) throw new Error("NOVITA_API_KEY not set");
 
-    // 4. Send to Colab LLM for summarization
+    const endpointUrl = `${NOVITA_SERVERLESS_BASE_URL}/chat/completions`;
+
+    // 4. Send to Novita Serverless API for summarization
     const payload = {
-      system_prompt: systemPrompt,
-      messages: [{ role: "user", content: chatHistory }],
+      model: DEFAULT_MODEL,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: chatHistory }
+      ],
       max_tokens: 300,
       temperature: 0.3, // Lower temperature for more factual summaries
     };
 
-    const res = await fetch(`${colabUrl}/chat`, {
+    const res = await fetch(endpointUrl, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { 
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${novitaKey}`
+      },
       body: JSON.stringify(payload),
     });
 
     if (!res.ok) {
       const errText = await res.text();
-      throw new Error(`Colab API error: ${res.status} - ${errText}`);
+      throw new Error(`Novita API error: ${res.status} - ${errText}`);
     }
 
     const data = await res.json();
-    let newSummary = data.reply;
+    let newSummary = data.choices?.[0]?.message?.content || "";
 
     // 5. Combine with existing summary if needed (or replace if it gets too long, 
     // but for now we append or replace. The prompt already instructed it to consider the previous summary).

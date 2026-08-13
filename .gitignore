@@ -50,3 +50,6 @@ scratch_*
 next-env.d.ts
 
 /app/generated/prisma
+main.py
+.gitignore
+tes_openrouter.py

@@ -3,9 +3,11 @@ import { UIMessage } from "ai";
 import { 
   getTier, 
   getTierDirective, 
+  getTierName,
   calculateNewLevel,
   SUMMARY_TRIGGER_COUNT 
 } from "@/lib/affinity";
+import { DEFAULT_MODEL, NOVITA_SERVERLESS_BASE_URL } from "@/lib/novita";
 import { generateAutoSummary } from "./summarize";
 
 export const maxDuration = 60;
@@ -29,7 +31,7 @@ export async function POST(req: Request) {
     ]);
 
     if (!character || !session || !userProfile) {
-      return NextResponse.json({ error: "Data not found" }, { status: 404 });
+      return new Response(JSON.stringify({ error: "Data not found" }), { status: 404, headers: { "Content-Type": "application/json" } });
     }
 
     // --- Initialize Affinity Data Early ---
@@ -100,7 +102,7 @@ Keep "reply" under 500 chars.`;
     // --- Consolidate into exactly 4 blocks to satisfy Colab backend expectations ---
     const block1 = `Identity:\nYou are ${character.name}.\n${character.backstory || ""}\n${character.key_memories || ""}`.trim();
     
-    const block2 = `Context & History:\n${character.scenario || ""}\n[Relationship: ${tier.name} (Level ${currentLevel})]\n${session.story_summary ? `[Previous Summary: ${session.story_summary}]` : ""}`.trim();
+    const block2 = `Context & History:\n${character.scenario || ""}\n[Relationship: ${getTierName(tier)} (Level ${currentLevel})]\n${session.story_summary ? `[Previous Summary: ${session.story_summary}]` : ""}`.trim();
     
     const block3 = `User Profile:\n${userInfoParts.join(" ")}\nStyle: ${userProfile?.response_style || "Normal"}`.trim();
     
@@ -134,30 +136,38 @@ Keep "reply" under 500 chars.`;
       content: msg.content,
     }));
 
-    // 6. Send to Colab LLM
-    const colabUrl = process.env.COLAB_API_URL;
-    if (!colabUrl) throw new Error("COLAB_API_URL belum disetel di .env");
+    // 6. Send to Novita Serverless API
+    const novitaKey = process.env.NOVITA_API_KEY;
+    if (!novitaKey) throw new Error("NOVITA_API_KEY belum disetel di .env");
+
+    const endpointUrl = `${NOVITA_SERVERLESS_BASE_URL}/chat/completions`;
 
     const payload = {
-      system_prompt: systemPrompt,
-      messages: contextMessages,
+      model: DEFAULT_MODEL,
+      messages: [
+        { role: "system", content: systemPrompt },
+        ...contextMessages
+      ],
       max_tokens: 200,
       temperature: temperature || 0.8,
     };
 
-    const res = await fetch(`${colabUrl}/chat`, {
+    const res = await fetch(endpointUrl, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { 
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${novitaKey}`
+      },
       body: JSON.stringify(payload),
     });
 
     if (!res.ok) {
       const errText = await res.text();
-      throw new Error(`API Colab error: ${res.status} - ${errText}`);
+      throw new Error(`API Novita error: ${res.status} - ${errText}`);
     }
 
     const data = await res.json();
-    let rawReply = data.reply;
+    let rawReply = data.choices?.[0]?.message?.content || "";
     let aiReply = "";
     let expChange = 0;
 

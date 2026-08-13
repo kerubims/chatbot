@@ -20,6 +20,27 @@ export default function ChatInput({ onSend, disabled }: ChatInputProps) {
     }
   }, [input]);
 
+  const insertActionStars = () => {
+    if (!textareaRef.current) return;
+    const start = textareaRef.current.selectionStart;
+    const end = textareaRef.current.selectionEnd;
+    const text = input;
+    
+    const before = text.substring(0, start);
+    const selected = text.substring(start, end);
+    const after = text.substring(end);
+    
+    const newText = before + "*" + selected + "*" + after;
+    setInput(newText);
+    
+    setTimeout(() => {
+      if (textareaRef.current) {
+        textareaRef.current.focus();
+        textareaRef.current.setSelectionRange(start + 1, end + 1);
+      }
+    }, 0);
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!input.trim() || disabled) return;
@@ -27,10 +48,14 @@ export default function ChatInput({ onSend, disabled }: ChatInputProps) {
     setInput("");
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      handleSubmit(e);
+      handleSubmit(e as unknown as React.FormEvent);
+    }
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'b') {
+      e.preventDefault();
+      insertActionStars();
     }
   };
 
@@ -43,6 +68,26 @@ export default function ChatInput({ onSend, disabled }: ChatInputProps) {
         borderTop: "1px solid var(--border-subtle)",
       }}
     >
+      <button
+        type="button"
+        onClick={insertActionStars}
+        disabled={disabled}
+        title="Tambah Action (Ctrl+B)"
+        style={{
+          padding: "11px 12px",
+          opacity: disabled ? 0.5 : 1,
+          cursor: disabled ? "not-allowed" : "pointer",
+          background: "transparent",
+          color: "var(--text-muted)",
+          border: "1px solid var(--border-subtle)",
+          borderRadius: "8px",
+          fontSize: "14px",
+          fontWeight: "bold",
+          marginBottom: "1px" // slight alignment tweak
+        }}
+      >
+        *
+      </button>
       <textarea
         ref={textareaRef}
         value={input}
