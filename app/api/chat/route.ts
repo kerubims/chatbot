@@ -1,5 +1,12 @@
 import { prisma } from "@/lib/prisma";
 import { UIMessage } from "ai";
+import { 
+  getTier, 
+  getTierDirective, 
+  calculateNewLevel,
+  SUMMARY_TRIGGER_COUNT 
+} from "@/lib/affinity";
+import { generateAutoSummary } from "./summarize";
 
 export const maxDuration = 60;
 
@@ -14,60 +21,56 @@ export async function POST(req: Request) {
       temperature?: number;
     };
 
-    // 1. Fetch character data
-    const character = await prisma.character.findUnique({
-      where: { id: characterId },
-    });
+    // 1. Fetch character and session data concurrently
+    const [character, session, userProfile] = await Promise.all([
+      prisma.character.findUnique({ where: { id: characterId } }),
+      prisma.chatSession.findUnique({ where: { id: sessionId } }),
+      prisma.userProfile.findUnique({ where: { id: SINGLETON_USER_ID } }),
+    ]);
 
-    if (!character) {
-      return new Response("Character not found", { status: 404 });
+    if (!character || !session || !userProfile) {
+      return NextResponse.json({ error: "Data not found" }, { status: 404 });
     }
 
-    // 2. Fetch user profile
-    const userProfile = await prisma.userProfile.findUnique({
-      where: { id: SINGLETON_USER_ID },
-    });
+    // --- Initialize Affinity Data Early ---
+    const currentLevel = session.affinity_level ?? 1;
+    const currentExp = session.affinity_exp ?? 0;
+    const tier = getTier(session.affinity_level);
+    const tierDirective = getTierDirective(tier);
 
-    // 3. Build the enriched multi-layer system prompt (Kindroid-style)
+    // 3. Build the enriched multi-layer system prompt
     const systemPromptParts: string[] = [];
 
-    // --- Character Identity ---
+    // --- Character Identity & Backstory ---
     systemPromptParts.push(`You are ${character.name}.`);
     if (character.gender && character.gender !== "Not specified") {
       systemPromptParts.push(`Your gender is ${character.gender}.`);
     }
-
-    // --- Backstory (core personality + history) ---
     if (character.backstory) {
       systemPromptParts.push(`\n[Backstory]\n${character.backstory}`);
     } else if (character.persona) {
-      // Fallback to old persona field
       systemPromptParts.push(`\n[Backstory]\n${character.persona}`);
     }
-
-    // --- Key Memories ---
     if (character.key_memories) {
       systemPromptParts.push(`\n[Key Memories]\n${character.key_memories}`);
     }
-
-    // --- Current Scenario ---
     if (character.scenario) {
       systemPromptParts.push(`\n[Current Scenario]\n${character.scenario}`);
     }
-
-    // --- Response Directives ---
     if (character.response_directives) {
       systemPromptParts.push(`\n[Response Directives]\n${character.response_directives}`);
     }
 
-    // --- Example Dialogue ---
-    if (character.example_dialogue) {
-      systemPromptParts.push(`\n[Example Dialogue]\n${character.example_dialogue}`);
+    // --- Dynamic Context: Affinity & Summary ---
+    systemPromptParts.push(`\n${tierDirective}`);
+
+    if (session.story_summary) {
+      systemPromptParts.push(`\n[Previous Story Summary]\n${session.story_summary}`);
     }
 
     // --- User Profile Info ---
+    const userInfoParts: string[] = [];
     if (userProfile) {
-      const userInfoParts: string[] = [];
       if (userProfile.display_name && userProfile.display_name !== "User") {
         userInfoParts.push(`The user's name is ${userProfile.display_name}.`);
       }
@@ -80,29 +83,41 @@ export async function POST(req: Request) {
       if (userInfoParts.length > 0) {
         systemPromptParts.push(`\n[User Information]\n${userInfoParts.join(" ")}`);
       }
-
-      // --- Global Response Style (from user preferences) ---
       if (userProfile.response_style) {
         systemPromptParts.push(`\n[Global Response Style]\n${userProfile.response_style}`);
       }
     }
 
-    const systemPrompt = systemPromptParts.join("\n");
+    // --- Force JSON Output ---
+    const responseInstructions = `
+[Response Format]
+Respond ONLY with this JSON:
+{"reply": "your response", "exp_change": 0}
+Keep "reply" under 500 chars.`;
+
+    systemPromptParts.push(responseInstructions);
+
+    // --- Consolidate into exactly 4 blocks to satisfy Colab backend expectations ---
+    const block1 = `Identity:\nYou are ${character.name}.\n${character.backstory || ""}\n${character.key_memories || ""}`.trim();
+    
+    const block2 = `Context & History:\n${character.scenario || ""}\n[Relationship: ${tier.name} (Level ${currentLevel})]\n${session.story_summary ? `[Previous Summary: ${session.story_summary}]` : ""}`.trim();
+    
+    const block3 = `User Profile:\n${userInfoParts.join(" ")}\nStyle: ${userProfile?.response_style || "Normal"}`.trim();
+    
+    const block4 = `Directives:\n${character.response_directives || ""}\n${character.example_dialogue || ""}\n${responseInstructions}`.trim();
+
+    const systemPrompt = [block1, block2, block3, block4].join("\n\n");
 
     // 4. Save user message to DB
     const lastUserMessage = messages.filter((m) => m.role === "user").pop();
-
+    let userText = "";
     if (lastUserMessage) {
-      const text = (lastUserMessage as any).content || 
+      userText = (lastUserMessage as any).content || 
         (lastUserMessage.parts?.find((p: any) => p.type === "text") as any)?.text;
         
-      if (text) {
+      if (userText) {
         await prisma.message.create({
-          data: {
-            session_id: sessionId,
-            role: "user",
-            content: text,
-          },
+          data: { session_id: sessionId, role: "user", content: userText },
         });
       }
     }
@@ -121,22 +136,18 @@ export async function POST(req: Request) {
 
     // 6. Send to Colab LLM
     const colabUrl = process.env.COLAB_API_URL;
-    if (!colabUrl) {
-      throw new Error("COLAB_API_URL belum disetel di .env");
-    }
+    if (!colabUrl) throw new Error("COLAB_API_URL belum disetel di .env");
 
     const payload = {
       system_prompt: systemPrompt,
       messages: contextMessages,
-      max_tokens: 1000,
+      max_tokens: 200,
       temperature: temperature || 0.8,
     };
 
     const res = await fetch(`${colabUrl}/chat`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
 
@@ -146,22 +157,68 @@ export async function POST(req: Request) {
     }
 
     const data = await res.json();
-    const reply = data.reply;
+    let rawReply = data.reply;
+    let aiReply = "";
+    let expChange = 0;
 
-    // 7. Save AI reply to DB
-    if (reply) {
+    try {
+      rawReply = rawReply.replace(/```json/g, "").replace(/```/g, "").trim();
+      const parsed = JSON.parse(rawReply);
+      aiReply = parsed.reply || "";
+      expChange = typeof parsed.exp_change === "number" ? parsed.exp_change : 0;
+    } catch (e) {
+      console.warn("Failed to parse JSON from AI, falling back to raw text.");
+      aiReply = rawReply;
+      expChange = 2;
+    }
+
+    // 8. Save AI reply to DB
+    if (aiReply) {
       await prisma.message.create({
-        data: {
-          session_id: sessionId,
-          role: "assistant",
-          content: reply,
+        data: { 
+          session_id: sessionId, 
+          role: "assistant", 
+          content: aiReply,
         },
       });
     }
 
-    // 8. Return plain text response
-    return new Response(reply, {
+    // 9. Process Affinity and Summary
+    // Guard against NULL values for sessions created before schema migration
+    const currentMsgCount = session.msg_since_summary ?? 0;
+
+    const { newLevel, newExp, leveledUp } = calculateNewLevel(
+      currentLevel,
+      currentExp,
+      expChange
+    );
+
+    const newMsgCount = currentMsgCount + 2; // +1 user, +1 assistant
+
+    await prisma.chatSession.update({
+      where: { id: sessionId },
+      data: {
+        affinity_level: newLevel,
+        affinity_exp: newExp,
+        msg_since_summary: newMsgCount,
+      },
+    });
+
+    // Fire auto-summary in background if threshold reached
+    if (newMsgCount >= SUMMARY_TRIGGER_COUNT) {
+      generateAutoSummary(sessionId, character.name, session.story_summary).catch(console.error);
+    }
+
+    // 10. Return rich JSON response
+    return new Response(JSON.stringify({
+      reply: aiReply,
+      exp_change: expChange,
+      affinity_level: newLevel,
+      affinity_exp: newExp,
+      leveledUp: leveledUp
+    }), {
       status: 200,
+      headers: { "Content-Type": "application/json" },
     });
 
   } catch (error: any) {

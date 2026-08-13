@@ -5,6 +5,9 @@ import ChatMessage from "@/app/components/ChatMessage";
 import ChatInput from "@/app/components/ChatInput";
 import TypingIndicator from "@/app/components/TypingIndicator";
 import SessionSidebar from "@/app/components/SessionSidebar";
+import AffinityBar from "@/app/components/AffinityBar";
+import ExpToast from "@/app/components/ExpToast";
+import LevelUpOverlay from "@/app/components/LevelUpOverlay";
 
 interface Character {
   id: string;
@@ -42,6 +45,12 @@ export default function ChatPage({
   const [messages, setMessages] = useState<any[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [error, setError] = useState<Error | null>(null);
+  
+  // Affinity State
+  const [affinityLevel, setAffinityLevel] = useState(1);
+  const [affinityExp, setAffinityExp] = useState(0);
+  const [toastExp, setToastExp] = useState<number | null>(null);
+  const [showLevelUp, setShowLevelUp] = useState<number | null>(null);
   
   // Settings
   const [temperature, setTemperature] = useState(0.8);
@@ -107,6 +116,8 @@ export default function ChatPage({
             parts: [{ type: "text" as const, text: msg.content }],
           }));
           setMessages(chatMessages);
+          setAffinityLevel(data.affinity_level || 1);
+          setAffinityExp(data.affinity_exp || 0);
         }
       } catch (err) {
         console.error(err);
@@ -178,15 +189,24 @@ export default function ChatPage({
         throw new Error(await res.text());
       }
 
-      const textResponse = await res.text();
+      const jsonResponse = await res.json();
       const assistantMessage = { 
         id: (Date.now() + 1).toString(), 
         role: "assistant", 
-        content: textResponse,
+        content: jsonResponse.reply,
         createdAt: new Date()
       };
       
       setMessages((prev) => [...prev, assistantMessage]);
+      setAffinityLevel(jsonResponse.affinity_level);
+      setAffinityExp(jsonResponse.affinity_exp);
+      
+      if (jsonResponse.exp_change !== 0) {
+        setToastExp(jsonResponse.exp_change);
+      }
+      if (jsonResponse.leveledUp) {
+        setShowLevelUp(jsonResponse.affinity_level);
+      }
     } catch (err: any) {
       console.error("Gagal mengirim pesan", err);
       setError(err);
@@ -245,7 +265,21 @@ export default function ChatPage({
       />
 
       {/* Chat Area */}
-      <div className="flex-1 flex flex-col h-screen overflow-hidden">
+      <div className="flex-1 flex flex-col h-screen overflow-hidden relative">
+        {showLevelUp !== null && (
+          <LevelUpOverlay
+            newLevel={showLevelUp}
+            onClose={() => setShowLevelUp(null)}
+          />
+        )}
+        {toastExp !== null && (
+          <ExpToast 
+            key={Date.now()} // Force remount if multiple rapid updates
+            expChange={toastExp} 
+            onComplete={() => setToastExp(null)} 
+          />
+        )}
+
         {/* Chat Header */}
         <div
           className="flex items-center gap-3 px-6 py-4"
@@ -269,7 +303,7 @@ export default function ChatPage({
               {character.name.charAt(0).toUpperCase()}
             </div>
           )}
-          <div>
+          <div className="flex-1">
             <h2 className="font-semibold text-sm">{character.name}</h2>
             <p
               className="text-xs"
@@ -277,6 +311,9 @@ export default function ChatPage({
             >
               {isStreaming ? "typing..." : "online"}
             </p>
+          </div>
+          <div className="flex-none">
+             <AffinityBar level={affinityLevel} exp={affinityExp} />
           </div>
         </div>
 
