@@ -6,6 +6,12 @@ interface Session {
   created_at: string;
 }
 
+interface UsageStats {
+  promptTokens: number;
+  completionTokens: number;
+  totalCost: number;
+}
+
 interface SessionSidebarProps {
   sessions: Session[];
   activeSessionId?: string;
@@ -15,6 +21,7 @@ interface SessionSidebarProps {
   characterName: string;
   temperature: number;
   setTemperature: (v: number) => void;
+  usageStats?: UsageStats;
 }
 
 export default function SessionSidebar({
@@ -26,6 +33,7 @@ export default function SessionSidebar({
   characterName,
   temperature,
   setTemperature,
+  usageStats,
 }: SessionSidebarProps) {
   return (
     <div
@@ -133,6 +141,34 @@ export default function SessionSidebar({
           />
         </div>
       </div>
+
+      {/* Usage Stats */}
+      {usageStats && (
+        <div
+          className="p-4 flex flex-col gap-2"
+          style={{ borderTop: "1px solid var(--border-subtle)" }}
+        >
+          <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)]">
+            Session Usage
+          </label>
+          <div className="flex flex-col gap-1" style={{ fontSize: "11px", fontFamily: "var(--font-mono)" }}>
+            <div className="flex justify-between">
+              <span style={{ color: "var(--text-muted)" }}>Tokens</span>
+              <span style={{ color: "var(--text-primary)" }}>
+                {(usageStats.promptTokens + usageStats.completionTokens).toLocaleString()}
+              </span>
+            </div>
+            <div className="flex justify-between">
+              <span style={{ color: "var(--text-muted)" }}>Cost</span>
+              <span style={{ color: "var(--accent-cyan)" }}>
+                {usageStats.totalCost < 0.0001 
+                  ? "< $0.0001" 
+                  : `$${usageStats.totalCost.toFixed(4)}`}
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Back link */}
       <div

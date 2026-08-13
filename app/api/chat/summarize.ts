@@ -1,18 +1,21 @@
 import { prisma } from "@/lib/prisma";
 import { DEFAULT_MODEL, NOVITA_SERVERLESS_BASE_URL } from "@/lib/novita";
+import { fetchWithRetry } from "@/lib/retry";
 
 export async function generateAutoSummary(
   sessionId: string,
   characterName: string,
-  existingSummary: string | null
+  existingGlobalSummary: string | null
 ) {
   try {
     // 1. Fetch recent messages that haven't been summarized
     const recentMessages = await prisma.message.findMany({
       where: { session_id: sessionId },
-      orderBy: { created_at: "asc" },
+      orderBy: { created_at: "desc" },
       take: 20, // Should match SUMMARY_TRIGGER_COUNT
     });
+    
+    recentMessages.reverse(); // Chronological order for the AI to summarize
 
     if (recentMessages.length === 0) return;
 
@@ -21,16 +24,22 @@ export async function generateAutoSummary(
       .map((msg) => `${msg.role === "assistant" ? characterName : "User"}: ${msg.content}`)
       .join("\n\n");
 
-    // 3. Build the summarization prompt
-    const systemPrompt = `You are an expert narrative journalist analyzing a roleplay chat session.
-Summarize the following chat history into 1-2 concise paragraphs. 
-Focus on:
-- Key events, actions, and emotional turning points
-- How the relationship between the characters evolved
-- Any important promises, secrets, or revelations made
+    // 3. Build the summarization prompt (JSON Forced)
+    const systemPrompt = `You are an expert narrative journalist and state tracker analyzing a roleplay chat session.
+You MUST output your response as a valid JSON object with EXACTLY these 3 keys:
+1. "chapter_summary": A detailed narrative summary of ONLY the provided chat history (1-2 paragraphs). Focus on key events, actions, emotional turning points, and dialogue.
+2. "global_summary": A highly condensed, rolling summary of the ENTIRE story from the beginning.
+3. "state": A short string detailing the current physical state at the END of the chat history. Include location, time/weather, character's clothing, user's clothing (if known), and physical posture/status.
 
-${existingSummary ? `[Previous Summary Context]\n${existingSummary}\n\n` : ""}
-Write in third person, past tense. Be concise but capture the essence. Do not include meta-commentary, just the summary.`;
+${existingGlobalSummary ? `[Previous Global Summary]\n${existingGlobalSummary}\n\nCombine this with the new events to form the new global_summary.` : "Since there is no previous global summary, the global_summary will just summarize the current events."}
+
+Example JSON format:
+{
+  "chapter_summary": "User and Character went to the park and talked about their past. Character revealed a secret.",
+  "global_summary": "User and Character met at the cafe, then went to the park where Character revealed a secret about their past.",
+  "state": "Location: Park bench. Time: Afternoon. Character: Wearing a red coat, sitting closely. User: Wearing a blue shirt."
+}
+Do NOT wrap the JSON in markdown blocks. Output raw JSON only.`;
 
     const novitaKey = process.env.NOVITA_API_KEY;
     if (!novitaKey) throw new Error("NOVITA_API_KEY not set");
@@ -44,11 +53,12 @@ Write in third person, past tense. Be concise but capture the essence. Do not in
         { role: "system", content: systemPrompt },
         { role: "user", content: chatHistory }
       ],
-      max_tokens: 300,
-      temperature: 0.3, // Lower temperature for more factual summaries
+      max_tokens: 800,
+      temperature: 0.3,
+      response_format: { type: "json_object" }, // Force JSON output
     };
 
-    const res = await fetch(endpointUrl, {
+    const res = await fetchWithRetry(endpointUrl, {
       method: "POST",
       headers: { 
         "Content-Type": "application/json",
@@ -63,23 +73,47 @@ Write in third person, past tense. Be concise but capture the essence. Do not in
     }
 
     const data = await res.json();
-    let newSummary = data.choices?.[0]?.message?.content || "";
+    const content = data.choices?.[0]?.message?.content || "{}";
+    
+    // 5. Parse JSON Response
+    let parsed: any = {};
+    try {
+      parsed = JSON.parse(content);
+    } catch (e) {
+      console.error("[Auto-Summary] Failed to parse JSON:", content);
+      return;
+    }
 
-    // 5. Combine with existing summary if needed (or replace if it gets too long, 
-    // but for now we append or replace. The prompt already instructed it to consider the previous summary).
-    // Actually, asking the LLM to write a new cohesive summary incorporating the previous one is better.
-    // So the newSummary *is* the combined summary.
+    const chapterSummary = parsed.chapter_summary || "No chapter summary generated.";
+    const globalSummary = parsed.global_summary || existingGlobalSummary;
+    const currentState = parsed.state || "";
 
-    // 6. Update the session in the database
-    await prisma.chatSession.update({
-      where: { id: sessionId },
-      data: {
-        story_summary: newSummary,
-        msg_since_summary: 0, // Reset counter
-      },
+    // 6. Update the database
+    // Get current chapter count to determine the next chapter number
+    const chapterCount = await prisma.storyChapter.count({
+      where: { session_id: sessionId }
     });
+    
+    // Use transaction to ensure both records are saved safely
+    await prisma.$transaction([
+      prisma.storyChapter.create({
+        data: {
+          session_id: sessionId,
+          chapter: chapterCount + 1,
+          content: chapterSummary,
+        }
+      }),
+      prisma.chatSession.update({
+        where: { id: sessionId },
+        data: {
+          global_summary: globalSummary,
+          current_state: currentState,
+          msg_since_summary: 0, // Reset counter
+        },
+      })
+    ]);
 
-    console.log(`[Auto-Summary] Generated summary for session ${sessionId}`);
+    console.log(`[Auto-Summary] Generated Chapter ${chapterCount + 1} and updated global state for session ${sessionId}`);
   } catch (error) {
     console.error("[Auto-Summary] Failed to generate summary:", error);
   }

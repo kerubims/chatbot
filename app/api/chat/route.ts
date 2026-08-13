@@ -9,13 +9,50 @@ import {
 } from "@/lib/affinity";
 import { DEFAULT_MODEL, NOVITA_SERVERLESS_BASE_URL } from "@/lib/novita";
 import { generateAutoSummary } from "./summarize";
+import { rateLimit } from "@/lib/rate-limit";
+import { fetchWithRetry } from "@/lib/retry";
 
 export const maxDuration = 60;
 
 const SINGLETON_USER_ID = "default-user";
 
+// Novita pricing: $0.05 per 1M tokens (both input and output)
+const COST_PER_TOKEN = 0.05 / 1_000_000;
+
+// Simple EXP calculation based on reply length (approach B — no JSON from model)
+function calculateExpFromReply(reply: string): number {
+  const len = reply.length;
+  if (len < 20) return 1;
+  if (len < 100) return 2;
+  if (len < 300) return 3;
+  return 5;
+}
+
 export async function POST(req: Request) {
   try {
+    // ── Rate Limiting ───────────────────────────────────────
+    const forwarded = req.headers.get("x-forwarded-for");
+    const ip = forwarded?.split(",")[0]?.trim() || "127.0.0.1";
+    const rateLimitResult = rateLimit(ip);
+
+    if (!rateLimitResult.success) {
+      const retryAfter = Math.ceil((rateLimitResult.resetAt - Date.now()) / 1000);
+      return new Response(
+        JSON.stringify({ 
+          error: "Rate limit exceeded", 
+          retryAfter,
+          message: `Terlalu banyak pesan. Coba lagi dalam ${retryAfter} detik.`
+        }),
+        { 
+          status: 429, 
+          headers: { 
+            "Content-Type": "application/json",
+            "Retry-After": String(retryAfter),
+          } 
+        }
+      );
+    }
+
     const { messages, sessionId, characterId, temperature } = (await req.json()) as {
       messages: UIMessage[];
       sessionId: string;
@@ -66,8 +103,12 @@ export async function POST(req: Request) {
     // --- Dynamic Context: Affinity & Summary ---
     systemPromptParts.push(`\n${tierDirective}`);
 
-    if (session.story_summary) {
-      systemPromptParts.push(`\n[Previous Story Summary]\n${session.story_summary}`);
+    if (session.global_summary) {
+      systemPromptParts.push(`\n[Previous Story Summary]\n${session.global_summary}`);
+    }
+    
+    if (session.current_state) {
+      systemPromptParts.push(`\n[Current State]\n${session.current_state}`);
     }
 
     // --- User Profile Info ---
@@ -90,19 +131,19 @@ export async function POST(req: Request) {
       }
     }
 
-    // --- Force JSON Output ---
+    // --- Plain text response instruction (Approach B) ---
     const responseInstructions = `
 [Response Format]
-Respond ONLY with this JSON:
-{"reply": "your response", "exp_change": 0}
-Keep "reply" under 500 chars.`;
+Respond naturally in character. Write your response as plain text.
+Use *asterisks* for actions/narration. Keep responses under 500 characters.
+Do NOT wrap your response in JSON or any special format.`;
 
     systemPromptParts.push(responseInstructions);
 
-    // --- Consolidate into exactly 4 blocks to satisfy Colab backend expectations ---
+    // --- Consolidate system prompt ---
     const block1 = `Identity:\nYou are ${character.name}.\n${character.backstory || ""}\n${character.key_memories || ""}`.trim();
     
-    const block2 = `Context & History:\n${character.scenario || ""}\n[Relationship: ${getTierName(tier)} (Level ${currentLevel})]\n${session.story_summary ? `[Previous Summary: ${session.story_summary}]` : ""}`.trim();
+    const block2 = `Context & History:\n${character.scenario || ""}\n[Relationship: ${getTierName(tier)} (Level ${currentLevel})]\n${session.global_summary ? `[Previous Summary: ${session.global_summary}]` : ""}\n${session.current_state ? `[Current State: ${session.current_state}]` : ""}`.trim();
     
     const block3 = `User Profile:\n${userInfoParts.join(" ")}\nStyle: ${userProfile?.response_style || "Normal"}`.trim();
     
@@ -124,19 +165,22 @@ Keep "reply" under 500 chars.`;
       }
     }
 
-    // 5. Fetch last 20 messages from DB for context
+    // 5. Fetch last 10 messages from DB for context (Reduced from 20 to save tokens)
     const dbMessages = await prisma.message.findMany({
       where: { session_id: sessionId },
-      orderBy: { created_at: "asc" },
-      take: 20,
+      orderBy: { created_at: "desc" },
+      take: 10,
     });
+    
+    // Reverse so they are in chronological order (oldest -> newest) for the AI prompt
+    dbMessages.reverse();
 
     const contextMessages = dbMessages.map((msg) => ({
       role: msg.role === "user" ? "user" : "assistant",
       content: msg.content,
     }));
 
-    // 6. Send to Novita Serverless API
+    // 6. Send to Novita Serverless API (STREAMING)
     const novitaKey = process.env.NOVITA_API_KEY;
     if (!novitaKey) throw new Error("NOVITA_API_KEY belum disetel di .env");
 
@@ -150,9 +194,11 @@ Keep "reply" under 500 chars.`;
       ],
       max_tokens: 200,
       temperature: temperature || 0.8,
+      stream: true,
+      include_usage: true,
     };
 
-    const res = await fetch(endpointUrl, {
+    const novitaRes = await fetchWithRetry(endpointUrl, {
       method: "POST",
       headers: { 
         "Content-Type": "application/json",
@@ -161,78 +207,163 @@ Keep "reply" under 500 chars.`;
       body: JSON.stringify(payload),
     });
 
-    if (!res.ok) {
-      const errText = await res.text();
-      throw new Error(`API Novita error: ${res.status} - ${errText}`);
+    if (!novitaRes.ok) {
+      const errText = await novitaRes.text();
+      throw new Error(`API Novita error: ${novitaRes.status} - ${errText}`);
     }
 
-    const data = await res.json();
-    let rawReply = data.choices?.[0]?.message?.content || "";
-    let aiReply = "";
-    let expChange = 0;
+    // ── Stream SSE from Novita → Client ──────────────────────
+    const encoder = new TextEncoder();
+    let fullReply = "";
+    let usageData = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
 
-    try {
-      rawReply = rawReply.replace(/```json/g, "").replace(/```/g, "").trim();
-      const parsed = JSON.parse(rawReply);
-      aiReply = parsed.reply || "";
-      expChange = typeof parsed.exp_change === "number" ? parsed.exp_change : 0;
-    } catch (e) {
-      console.warn("Failed to parse JSON from AI, falling back to raw text.");
-      aiReply = rawReply;
-      expChange = 2;
-    }
+    const stream = new ReadableStream({
+      async start(controller) {
+        try {
+          const reader = novitaRes.body!.getReader();
+          const decoder = new TextDecoder();
+          let buffer = "";
 
-    // 8. Save AI reply to DB
-    if (aiReply) {
-      await prisma.message.create({
-        data: { 
-          session_id: sessionId, 
-          role: "assistant", 
-          content: aiReply,
-        },
-      });
-    }
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
 
-    // 9. Process Affinity and Summary
-    // Guard against NULL values for sessions created before schema migration
-    const currentMsgCount = session.msg_since_summary ?? 0;
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split("\n");
+            buffer = lines.pop() || ""; // Keep incomplete line in buffer
 
-    const { newLevel, newExp, leveledUp } = calculateNewLevel(
-      currentLevel,
-      currentExp,
-      expChange
-    );
+            for (const line of lines) {
+              const trimmed = line.trim();
+              if (!trimmed || !trimmed.startsWith("data: ")) continue;
 
-    const newMsgCount = currentMsgCount + 2; // +1 user, +1 assistant
+              const data = trimmed.slice(6);
+              if (data === "[DONE]") continue;
 
-    await prisma.chatSession.update({
-      where: { id: sessionId },
-      data: {
-        affinity_level: newLevel,
-        affinity_exp: newExp,
-        msg_since_summary: newMsgCount,
+              try {
+                const parsed = JSON.parse(data);
+                
+                // Extract token content
+                const delta = parsed.choices?.[0]?.delta;
+                if (delta?.content) {
+                  fullReply += delta.content;
+                  // Forward token to client
+                  controller.enqueue(
+                    encoder.encode(`data: ${JSON.stringify({ type: "token", content: delta.content })}\n\n`)
+                  );
+                }
+
+                // Extract usage data (sent in the last chunk before [DONE])
+                if (parsed.usage) {
+                  usageData = {
+                    prompt_tokens: parsed.usage.prompt_tokens || 0,
+                    completion_tokens: parsed.usage.completion_tokens || 0,
+                    total_tokens: parsed.usage.total_tokens || 0,
+                  };
+                }
+              } catch {
+                // Skip unparseable chunks
+              }
+            }
+          }
+
+          // ── Post-stream processing ──────────────────────────
+          const aiReply = fullReply.trim();
+          const expChange = calculateExpFromReply(aiReply);
+
+          // Save AI reply to DB
+          if (aiReply) {
+            await prisma.message.create({
+              data: { 
+                session_id: sessionId, 
+                role: "assistant", 
+                content: aiReply,
+              },
+            });
+          }
+
+          // Process Affinity
+          const currentMsgCount = session.msg_since_summary ?? 0;
+          const { newLevel, newExp, leveledUp } = calculateNewLevel(
+            currentLevel,
+            currentExp,
+            expChange
+          );
+          const newMsgCount = currentMsgCount + 2;
+
+          // Calculate cost
+          const cost = (usageData.prompt_tokens + usageData.completion_tokens) * COST_PER_TOKEN;
+
+          // Update session (affinity + usage stats)
+          await prisma.chatSession.update({
+            where: { id: sessionId },
+            data: {
+              affinity_level: newLevel,
+              affinity_exp: newExp,
+              msg_since_summary: newMsgCount,
+              total_prompt_tokens: { increment: usageData.prompt_tokens },
+              total_completion_tokens: { increment: usageData.completion_tokens },
+              total_cost_usd: { increment: cost },
+            },
+          });
+
+          // Save usage log
+          if (usageData.total_tokens > 0) {
+            await prisma.usageLog.create({
+              data: {
+                session_id: sessionId,
+                prompt_tokens: usageData.prompt_tokens,
+                completion_tokens: usageData.completion_tokens,
+                total_tokens: usageData.total_tokens,
+                cost_usd: cost,
+                model: DEFAULT_MODEL,
+              },
+            });
+          }
+
+          // Fire auto-summary in background if threshold reached
+          if (newMsgCount >= SUMMARY_TRIGGER_COUNT) {
+            generateAutoSummary(sessionId, character.name, session.global_summary).catch(console.error);
+          }
+
+          // Send final "done" event with metadata
+          controller.enqueue(
+            encoder.encode(`data: ${JSON.stringify({
+              type: "done",
+              reply: aiReply,
+              exp_change: expChange,
+              affinity_level: newLevel,
+              affinity_exp: newExp,
+              leveledUp,
+              usage: usageData,
+              cost,
+            })}\n\n`)
+          );
+
+          controller.close();
+        } catch (err: any) {
+          console.error("Stream processing error:", err);
+          controller.enqueue(
+            encoder.encode(`data: ${JSON.stringify({ type: "error", message: err.message })}\n\n`)
+          );
+          controller.close();
+        }
       },
     });
 
-    // Fire auto-summary in background if threshold reached
-    if (newMsgCount >= SUMMARY_TRIGGER_COUNT) {
-      generateAutoSummary(sessionId, character.name, session.story_summary).catch(console.error);
-    }
-
-    // 10. Return rich JSON response
-    return new Response(JSON.stringify({
-      reply: aiReply,
-      exp_change: expChange,
-      affinity_level: newLevel,
-      affinity_exp: newExp,
-      leveledUp: leveledUp
-    }), {
+    return new Response(stream, {
       status: 200,
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+      },
     });
 
   } catch (error: any) {
     console.error("Chat API error:", error);
-    return new Response(error.message || "Internal server error", { status: 500 });
+    return new Response(
+      JSON.stringify({ error: error.message || "Internal server error" }), 
+      { status: 500, headers: { "Content-Type": "application/json" } }
+    );
   }
 }

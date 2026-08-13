@@ -4,12 +4,14 @@ interface ChatMessageProps {
   role: "user" | "assistant";
   content: string;
   characterName?: string;
+  isStreaming?: boolean;
 }
 
 export default function ChatMessage({
   role,
   content,
   characterName,
+  isStreaming,
 }: ChatMessageProps) {
   // Parse *action* text to italic for roleplay
   const formatContent = (text: string) => {
@@ -44,8 +46,12 @@ export default function ChatMessage({
             {characterName}
           </p>
         )}
-        <div className="whitespace-pre-wrap">{formatContent(content)}</div>
+        <div className="whitespace-pre-wrap">
+          {formatContent(content)}
+          {isStreaming && <span className="streaming-cursor">▊</span>}
+        </div>
       </div>
     </div>
   );
 }
+

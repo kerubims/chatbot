@@ -41,19 +41,38 @@ model Character {
 
 // ─── Chat Session ───────────────────────────────────────────
 model ChatSession {
-  id                String    @id @default(uuid())
-  character_id      String
-  title             String
-  created_at        DateTime  @default(now())
-  affinity_exp      Int       @default(0)
-  affinity_level    Int       @default(1)
-  story_summary     String?   @db.Text
-  msg_since_summary Int       @default(0)
-  character         Character @relation(fields: [character_id], references: [id], onDelete: Cascade, map: "ChatSession_character_id_fkey")
-  messages          Message[]
+  id                     String     @id @default(uuid())
+  character_id           String
+  title                  String
+  created_at             DateTime   @default(now())
+  affinity_exp           Int        @default(0)
+  affinity_level         Int        @default(1)
+  global_summary         String?    @db.Text
+  current_state          String?    @db.Text
+  msg_since_summary      Int        @default(0)
+  total_prompt_tokens    Int        @default(0)
+  total_completion_tokens Int       @default(0)
+  total_cost_usd         Float      @default(0)
+  character              Character  @relation(fields: [character_id], references: [id], onDelete: Cascade, map: "ChatSession_character_id_fkey")
+  messages               Message[]
+  usage_logs             UsageLog[]
+  chapters               StoryChapter[]
 
   @@index([character_id], map: "ChatSession_character_id_fkey")
   @@map("chatsession")
+}
+
+// ─── Story Chapter (UI Summary History) ─────────────────────
+model StoryChapter {
+  id         String      @id @default(uuid())
+  session_id String
+  chapter    Int
+  content    String      @db.Text
+  created_at DateTime    @default(now())
+  session    ChatSession @relation(fields: [session_id], references: [id], onDelete: Cascade, map: "StoryChapter_session_id_fkey")
+
+  @@index([session_id], map: "StoryChapter_session_id_fkey")
+  @@map("story_chapter")
 }
 
 // ─── Message ────────────────────────────────────────────────
@@ -68,3 +87,20 @@ model Message {
   @@index([session_id], map: "Message_session_id_fkey")
   @@map("message")
 }
+
+// ─── Usage Log (Token Tracking) ─────────────────────────────
+model UsageLog {
+  id                String      @id @default(uuid())
+  session_id        String
+  prompt_tokens     Int
+  completion_tokens Int
+  total_tokens      Int
+  cost_usd          Float
+  model             String
+  created_at        DateTime    @default(now())
+  session           ChatSession @relation(fields: [session_id], references: [id], onDelete: Cascade, map: "UsageLog_session_id_fkey")
+
+  @@index([session_id], map: "UsageLog_session_id_fkey")
+  @@map("usage_log")
+}
+
