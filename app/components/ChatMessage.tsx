@@ -4,6 +4,7 @@ interface ChatMessageProps {
   role: "user" | "assistant";
   content: string;
   characterName?: string;
+  avatarUrl?: string | null;
   isStreaming?: boolean;
 }
 
@@ -11,6 +12,7 @@ export default function ChatMessage({
   role,
   content,
   characterName,
+  avatarUrl,
   isStreaming,
 }: ChatMessageProps) {
   // Parse *action* text to italic for roleplay
@@ -32,14 +34,14 @@ export default function ChatMessage({
     return (
       <div className="flex justify-end animate-fade-in">
         <div className="chat-bubble-user">
-          <p className="whitespace-pre-wrap">{content}</p>
+          <div className="whitespace-pre-wrap">{formatContent(content)}</div>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="flex justify-start gap-3 animate-fade-in">
+    <div className="flex justify-start items-end gap-2 animate-fade-in">
       <div className="chat-bubble-assistant">
         {characterName && (
           <p className="text-xs text-[var(--accent-primary)] font-semibold mb-1.5">
@@ -54,4 +56,3 @@ export default function ChatMessage({
     </div>
   );
 }
-

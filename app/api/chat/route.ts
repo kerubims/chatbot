@@ -11,6 +11,8 @@ import { DEFAULT_MODEL, NOVITA_SERVERLESS_BASE_URL } from "@/lib/novita";
 import { generateAutoSummary } from "./summarize";
 import { rateLimit } from "@/lib/rate-limit";
 import { fetchWithRetry } from "@/lib/retry";
+import { updateStateAsync } from "@/lib/state-tracker";
+import * as fs from "fs";
 
 export const maxDuration = 60;
 
@@ -63,7 +65,10 @@ export async function POST(req: Request) {
     // 1. Fetch character and session data concurrently
     const [character, session, userProfile] = await Promise.all([
       prisma.character.findUnique({ where: { id: characterId } }),
-      prisma.chatSession.findUnique({ where: { id: sessionId } }),
+      prisma.chatSession.findUnique({ 
+        where: { id: sessionId },
+        include: { facts: true }
+      }),
       prisma.userProfile.findUnique({ where: { id: SINGLETON_USER_ID } }),
     ]);
 
@@ -115,7 +120,7 @@ export async function POST(req: Request) {
     const userInfoParts: string[] = [];
     if (userProfile) {
       if (userProfile.display_name && userProfile.display_name !== "User") {
-        userInfoParts.push(`The user's name is ${userProfile.display_name}.`);
+        userInfoParts.push(`The human you are talking to is named ${userProfile.display_name}.`);
       }
       if (userProfile.gender && userProfile.gender !== "Not specified") {
         userInfoParts.push(`The user's gender is ${userProfile.gender}.`);
@@ -130,24 +135,48 @@ export async function POST(req: Request) {
         systemPromptParts.push(`\n[Global Response Style]\n${userProfile.response_style}`);
       }
     }
-
-    // --- Plain text response instruction (Approach B) ---
     const responseInstructions = `
-[Response Format]
-Respond naturally in character. Write your response as plain text.
-Use *asterisks* for actions/narration. Keep responses under 500 characters.
-Do NOT wrap your response in JSON or any special format.`;
+[CRITICAL FORMATTING RULES]
+1. You MUST enclose ALL non-spoken actions, thoughts, and narration inside *asterisks*. Example: *smiles warmly and steps closer*
+2. ONLY spoken dialogue should be outside asterisks, wrapped in quotes. Example: "Hello there."
+3. NEVER write plain text narration like a novel. If it is an action, it MUST have asterisks!
+4. STRICT LENGTH RULE: You MUST mirror the length of the User's message. If the User writes a short 1-line message, you MUST reply with a short 1-2 line message. NEVER write long paragraphs unless the User does.
+5. Keep *action narration* extremely brief (1 short sentence max). Focus heavily on dialogue.
+6. Let the User drive the action. Do not fast-forward or speak for the User.
+7. Avoid purple prose, repetitive actions, and overly poetic descriptions. Be concise and natural.
+8. Plain text output only. No JSON.`;
 
     systemPromptParts.push(responseInstructions);
 
+    // --- Dynamic Placeholder Replacement ---
+    let charBackstory = character.backstory || character.persona || "";
+    let charMemories = character.key_memories || "";
+    let charScenario = character.scenario || "";
+    let charDirectives = character.response_directives || "";
+    let charExample = character.example_dialogue || "";
+
+    if (userProfile && userProfile.display_name && userProfile.display_name !== "User") {
+      const replaceUser = (text: string) => text.replace(/\bUser\b/g, userProfile.display_name as string);
+      charBackstory = replaceUser(charBackstory);
+      charMemories = replaceUser(charMemories);
+      charScenario = replaceUser(charScenario);
+      charDirectives = replaceUser(charDirectives);
+      charExample = replaceUser(charExample);
+    }
+
+    const factsList = session.facts && session.facts.length > 0 
+      ? "\n[Permanent Memories / Facts]\n" + session.facts.map((f: any) => `- ${f.fact}`).join("\n")
+      : "";
+    const genderStr = character.gender && character.gender !== "Not specified" ? `\nGender: ${character.gender}` : "";
+
     // --- Consolidate system prompt ---
-    const block1 = `Identity:\nYou are ${character.name}.\n${character.backstory || ""}\n${character.key_memories || ""}`.trim();
+    const block1 = `Identity:\nYou are ${character.name}.${genderStr}\n${charBackstory}\n${charMemories}${factsList}`.trim();
     
-    const block2 = `Context & History:\n${character.scenario || ""}\n[Relationship: ${getTierName(tier)} (Level ${currentLevel})]\n${session.global_summary ? `[Previous Summary: ${session.global_summary}]` : ""}\n${session.current_state ? `[Current State: ${session.current_state}]` : ""}`.trim();
+    const block2 = `Context & History:\n${charScenario}\n[Relationship: ${getTierName(tier)} (Level ${currentLevel})]\n${tierDirective}\n${session.global_summary ? `[Previous Summary: ${session.global_summary}]` : ""}\n${session.current_state ? `[Current State: ${session.current_state}]` : ""}`.trim();
     
     const block3 = `User Profile:\n${userInfoParts.join(" ")}\nStyle: ${userProfile?.response_style || "Normal"}`.trim();
     
-    const block4 = `Directives:\n${character.response_directives || ""}\n${character.example_dialogue || ""}\n${responseInstructions}`.trim();
+    const block4 = `Directives:\n${charDirectives}\n${charExample}\n${responseInstructions}`.trim();
 
     const systemPrompt = [block1, block2, block3, block4].join("\n\n");
 
@@ -192,11 +221,19 @@ Do NOT wrap your response in JSON or any special format.`;
         { role: "system", content: systemPrompt },
         ...contextMessages
       ],
-      max_tokens: 200,
+      max_tokens: 400,
       temperature: temperature || 0.8,
       stream: true,
       include_usage: true,
     };
+
+    // --- DEBUG LOG: Save raw prompt to file ---
+    try {
+      const logContent = `\n================ [MAIN CHAT PROMPT LOG] ================\nTIMESTAMP: ${new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' })}\nCHARACTER: ${character.name}\nPAYLOAD MESSAGES:\n${JSON.stringify(payload.messages, null, 2)}\n========================================================\n`;
+      fs.appendFileSync('debug_logs.txt', logContent);
+    } catch (e) {
+      console.error("Failed to write debug log", e);
+    }
 
     const novitaRes = await fetchWithRetry(endpointUrl, {
       method: "POST",
@@ -323,6 +360,16 @@ Do NOT wrap your response in JSON or any special format.`;
           // Fire auto-summary in background if threshold reached
           if (newMsgCount >= SUMMARY_TRIGGER_COUNT) {
             generateAutoSummary(sessionId, character.name, session.global_summary).catch(console.error);
+          }
+
+          // Real-time Async State Tracking (fire and forget, throttled every 4 messages)
+          if (userText && aiReply) {
+            const shouldTriggerTracker = Math.floor(currentMsgCount / 4) < Math.floor(newMsgCount / 4);
+            if (shouldTriggerTracker) {
+              const lastExchanges = contextMessages.slice(-7).map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`).join('\n');
+              const trackingContext = `${lastExchanges}\nAssistant: ${aiReply}`;
+              updateStateAsync(sessionId, session.current_state, trackingContext).catch(console.error);
+            }
           }
 
           // Send final "done" event with metadata

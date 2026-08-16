@@ -45,7 +45,7 @@ export default function CharactersPage() {
   return (
     <main className="min-h-screen p-6 md:p-10 max-w-6xl mx-auto">
       {/* Header */}
-      <div className="flex items-center justify-between mb-8">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
         <div>
           <Link
             href="/"
@@ -55,7 +55,7 @@ export default function CharactersPage() {
             ← Home
           </Link>
           <h1
-            className="text-3xl font-bold"
+            className="text-2xl sm:text-3xl font-bold"
             style={{
               background:
                 "linear-gradient(135deg, var(--accent-primary), var(--accent-pink))",
@@ -65,21 +65,21 @@ export default function CharactersPage() {
           >
             🎭 Character Hub
           </h1>
-          <p className="mt-1" style={{ color: "var(--text-secondary)" }}>
+          <p className="mt-1 text-sm sm:text-base" style={{ color: "var(--text-secondary)" }}>
             Create and manage your AI characters
           </p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 shrink-0">
           <Link
             href="/profile"
-            className="btn-secondary"
+            className="btn-secondary text-sm"
             style={{ textDecoration: "none" }}
           >
             👤 Profile
           </Link>
           <Link
             href="/characters/new"
-            className="btn-primary"
+            className="btn-primary text-sm"
             style={{ textDecoration: "none" }}
           >
             <span>+ New Character</span>

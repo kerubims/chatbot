@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { DEFAULT_MODEL, NOVITA_SERVERLESS_BASE_URL } from "@/lib/novita";
 import { fetchWithRetry } from "@/lib/retry";
+import * as fs from "fs";
 
 export async function generateAutoSummary(
   sessionId: string,
@@ -25,11 +26,11 @@ export async function generateAutoSummary(
       .join("\n\n");
 
     // 3. Build the summarization prompt (JSON Forced)
-    const systemPrompt = `You are an expert narrative journalist and state tracker analyzing a roleplay chat session.
+    const systemPrompt = `You are an expert narrative journalist analyzing a roleplay chat session.
 You MUST output your response as a valid JSON object with EXACTLY these 3 keys:
 1. "chapter_summary": A detailed narrative summary of ONLY the provided chat history (1-2 paragraphs). Focus on key events, actions, emotional turning points, and dialogue.
 2. "global_summary": A highly condensed, rolling summary of the ENTIRE story from the beginning.
-3. "state": A short string detailing the current physical state at the END of the chat history. Include location, time/weather, character's clothing, user's clothing (if known), and physical posture/status.
+3. "new_facts": An array of strings containing ONLY permanent NEW facts established in this chat history (e.g. items obtained/lost, secrets revealed, promises made, specific new locations discovered). If there are none, return an empty array []. Keep facts concise.
 
 ${existingGlobalSummary ? `[Previous Global Summary]\n${existingGlobalSummary}\n\nCombine this with the new events to form the new global_summary.` : "Since there is no previous global summary, the global_summary will just summarize the current events."}
 
@@ -37,7 +38,7 @@ Example JSON format:
 {
   "chapter_summary": "User and Character went to the park and talked about their past. Character revealed a secret.",
   "global_summary": "User and Character met at the cafe, then went to the park where Character revealed a secret about their past.",
-  "state": "Location: Park bench. Time: Afternoon. Character: Wearing a red coat, sitting closely. User: Wearing a blue shirt."
+  "new_facts": ["User and Character agreed to go to the park", "Character revealed they have a fear of dogs"]
 }
 Do NOT wrap the JSON in markdown blocks. Output raw JSON only.`;
 
@@ -55,7 +56,6 @@ Do NOT wrap the JSON in markdown blocks. Output raw JSON only.`;
       ],
       max_tokens: 800,
       temperature: 0.3,
-      response_format: { type: "json_object" }, // Force JSON output
     };
 
     const res = await fetchWithRetry(endpointUrl, {
@@ -75,18 +75,25 @@ Do NOT wrap the JSON in markdown blocks. Output raw JSON only.`;
     const data = await res.json();
     const content = data.choices?.[0]?.message?.content || "{}";
     
+    fs.appendFileSync('debug_logs.txt', `\n[SUMMARIZE RAW]\n${content}\n`);
+
     // 5. Parse JSON Response
     let parsed: any = {};
     try {
-      parsed = JSON.parse(content);
-    } catch (e) {
+      // Extract just the JSON object in case it's wrapped in markdown
+      const jsonMatch = content.match(/\{[\s\S]*\}/);
+      const cleanJson = jsonMatch ? jsonMatch[0] : content;
+      parsed = JSON.parse(cleanJson);
+      fs.appendFileSync('debug_logs.txt', `[SUMMARIZE PARSED] Success\n`);
+    } catch (e: any) {
+      fs.appendFileSync('debug_logs.txt', `[SUMMARIZE ERROR] Parse failed: ${e.message}\n`);
       console.error("[Auto-Summary] Failed to parse JSON:", content);
       return;
     }
 
     const chapterSummary = parsed.chapter_summary || "No chapter summary generated.";
     const globalSummary = parsed.global_summary || existingGlobalSummary;
-    const currentState = parsed.state || "";
+    const newFacts: string[] = Array.isArray(parsed.new_facts) ? parsed.new_facts : [];
 
     // 6. Update the database
     // Get current chapter count to determine the next chapter number
@@ -94,8 +101,8 @@ Do NOT wrap the JSON in markdown blocks. Output raw JSON only.`;
       where: { session_id: sessionId }
     });
     
-    // Use transaction to ensure both records are saved safely
-    await prisma.$transaction([
+    // Prepare the transactions
+    const transactions: any[] = [
       prisma.storyChapter.create({
         data: {
           session_id: sessionId,
@@ -107,11 +114,26 @@ Do NOT wrap the JSON in markdown blocks. Output raw JSON only.`;
         where: { id: sessionId },
         data: {
           global_summary: globalSummary,
-          current_state: currentState,
           msg_since_summary: 0, // Reset counter
         },
       })
-    ]);
+    ];
+
+    // Add facts creation to the transaction if there are new facts
+    if (newFacts.length > 0) {
+      const factRecords = newFacts.map(fact => ({
+        session_id: sessionId,
+        fact: fact
+      }));
+      transactions.push(
+        prisma.characterFact.createMany({
+          data: factRecords
+        })
+      );
+    }
+
+    // Use transaction to ensure all records are saved safely
+    await prisma.$transaction(transactions);
 
     console.log(`[Auto-Summary] Generated Chapter ${chapterCount + 1} and updated global state for session ${sessionId}`);
   } catch (error) {

@@ -57,6 +57,7 @@ model ChatSession {
   messages               Message[]
   usage_logs             UsageLog[]
   chapters               StoryChapter[]
+  facts                  CharacterFact[]
 
   @@index([character_id], map: "ChatSession_character_id_fkey")
   @@map("chatsession")
@@ -104,3 +105,14 @@ model UsageLog {
   @@map("usage_log")
 }
 
+// ─── Character Facts (Long-Term Memory) ─────────────────────
+model CharacterFact {
+  id         String      @id @default(uuid())
+  session_id String
+  fact       String      @db.Text
+  created_at DateTime    @default(now())
+  session    ChatSession @relation(fields: [session_id], references: [id], onDelete: Cascade)
+
+  @@index([session_id])
+  @@map("character_fact")
+}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 
@@ -14,7 +14,9 @@ const GENDER_OPTIONS = [
 
 export default function NewCharacterPage() {
   const router = useRouter();
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [saving, setSaving] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const [activeTab, setActiveTab] = useState<"basic" | "advanced">("basic");
   const [form, setForm] = useState({
     name: "",
@@ -50,6 +52,38 @@ export default function NewCharacterPage() {
       alert("Error creating character");
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setUploading(true);
+    const formData = new FormData();
+    formData.append("file", file);
+
+    try {
+      const res = await fetch("/api/upload", {
+        method: "POST",
+        body: formData,
+      });
+      
+      const data = await res.json();
+      if (data.success) {
+        setForm({ ...form, avatar_url: data.url });
+      } else {
+        alert("Failed to upload image: " + data.error);
+      }
+    } catch (err) {
+      console.error(err);
+      alert("Error uploading image");
+    } finally {
+      setUploading(false);
+      // Reset input so the same file can be uploaded again if needed
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
     }
   };
 
@@ -126,7 +160,7 @@ export default function NewCharacterPage() {
               />
             </div>
 
-            {/* Avatar URL */}
+            {/* Avatar URL & Upload */}
             <div>
               <label
                 className="block text-sm font-medium mb-2"
@@ -134,15 +168,42 @@ export default function NewCharacterPage() {
               >
                 Avatar URL (optional)
               </label>
-              <input
-                type="url"
-                value={form.avatar_url}
-                onChange={(e) =>
-                  setForm({ ...form, avatar_url: e.target.value })
-                }
-                placeholder="https://example.com/avatar.png"
-                className="input-field"
-              />
+              <div className="flex gap-2">
+                {form.avatar_url && (
+                  <img src={form.avatar_url} alt="Avatar" className="w-10 h-10 rounded-full object-cover border border-[var(--border-subtle)]" />
+                )}
+                <input
+                  type="text"
+                  value={form.avatar_url}
+                  onChange={(e) =>
+                    setForm({ ...form, avatar_url: e.target.value })
+                  }
+                  placeholder="https://example.com/avatar.png"
+                  className="input-field flex-1"
+                />
+                
+                <input 
+                  type="file" 
+                  ref={fileInputRef}
+                  accept="image/*"
+                  onChange={handleImageUpload}
+                  className="hidden"
+                />
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={uploading}
+                  className="px-4 py-2 rounded-lg text-sm font-medium transition-all cursor-pointer whitespace-nowrap"
+                  style={{
+                    background: "var(--bg-card)",
+                    color: "var(--text-primary)",
+                    border: "1px solid var(--border-subtle)",
+                    opacity: uploading ? 0.6 : 1
+                  }}
+                >
+                  {uploading ? "Uploading..." : "📁 Upload Image"}
+                </button>
+              </div>
             </div>
 
             {/* Gender */}
@@ -391,7 +452,11 @@ Luna: *her composure cracks for just a moment, genuine surprise flickering acros
               PREVIEW
             </h3>
             <div className="flex items-center gap-3 mb-3">
-              <div className="avatar">{form.name.charAt(0).toUpperCase()}</div>
+              {form.avatar_url ? (
+                <img src={form.avatar_url} alt="Avatar Preview" className="avatar object-cover" />
+              ) : (
+                <div className="avatar">{form.name.charAt(0).toUpperCase()}</div>
+              )}
               <div>
                 <p className="font-semibold">{form.name}</p>
                 <p

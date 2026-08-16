@@ -38,8 +38,14 @@ export default function StoryViewer({ sessionId, onClose }: StoryViewerProps) {
   }, [sessionId]);
 
   return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex flex-col items-center justify-center p-4 animate-fade-in">
-      <div className="bg-[var(--bg-card)] border border-[var(--border-subtle)] rounded-xl shadow-2xl w-full max-w-2xl max-h-[85vh] flex flex-col">
+    <div 
+      className="fixed inset-0 bg-black/60 backdrop-blur-md z-50 flex flex-col items-center justify-end sm:justify-center p-0 sm:p-6 animate-fade-in"
+      onClick={onClose}
+    >
+      <div 
+        className="bg-[var(--bg-card)] border border-[var(--border-subtle)] rounded-t-2xl sm:rounded-2xl shadow-2xl w-full sm:max-w-2xl max-h-[90vh] sm:max-h-[85vh] flex flex-col animate-pop-in"
+        onClick={(e) => e.stopPropagation()}
+      >
         
         {/* Header */}
         <div className="px-6 py-4 border-b border-[var(--border-subtle)] flex justify-between items-center">
@@ -53,37 +59,38 @@ export default function StoryViewer({ sessionId, onClose }: StoryViewerProps) {
         </div>
 
         {/* Content */}
-        <div className="flex-1 overflow-y-auto p-6 flex flex-col gap-8">
+        <div className="flex-1 overflow-y-auto p-4 sm:p-6 flex flex-col gap-6 bg-[#16151e] rounded-b-2xl">
           {loading ? (
-            <div className="text-center text-[var(--text-muted)] py-10">Loading journal...</div>
-          ) : chapters.length === 0 ? (
-            <div className="text-center text-[var(--text-muted)] py-10">
-              <p>No chapters written yet.</p>
-              <p className="text-sm mt-2">The story is automatically summarized every 20 messages.</p>
-            </div>
+            <div className="text-center text-white/50 py-10">Loading journal...</div>
           ) : (
             <>
-              {/* Chapters List */}
-              <div className="flex flex-col gap-6">
-                {chapters.map((ch) => (
-                  <div key={ch.id} className="flex flex-col gap-2">
-                    <h3 className="text-[var(--accent-cyan)] font-semibold text-sm uppercase tracking-wider">
-                      Chapter {ch.chapter}
-                    </h3>
-                    <p className="text-[var(--text-primary)] leading-relaxed whitespace-pre-wrap text-sm">
-                      {ch.content}
-                    </p>
-                  </div>
-                ))}
-              </div>
+              {chapters.length === 0 ? (
+                <div className="text-center py-6 pb-2 border-b border-white/5 mb-2">
+                  <p className="text-[#8c8b99] font-medium text-[15px]">No chapters written yet.</p>
+                  <p className="text-[#646370] text-sm mt-1">The story is automatically summarized every 20 messages.</p>
+                </div>
+              ) : (
+                <div className="flex flex-col gap-6 mb-2">
+                  {chapters.map((ch) => (
+                    <div key={ch.id} className="flex flex-col gap-2">
+                      <h3 className="text-[#9f7aea] font-semibold text-sm uppercase tracking-wider">
+                        Chapter {ch.chapter}
+                      </h3>
+                      <p className="text-white/90 leading-relaxed whitespace-pre-wrap text-[15px]">
+                        {ch.content}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              )}
 
               {/* Current State (if exists) */}
               {currentState && (
-                <div className="mt-4 p-4 bg-[rgba(255,255,255,0.03)] border border-[var(--border-subtle)] rounded-lg">
-                  <h3 className="text-[var(--text-muted)] font-semibold text-xs uppercase tracking-wider mb-2">
-                    Current State (Memory)
+                <div className="p-5 bg-[#21202b] rounded-2xl shadow-inner mt-2">
+                  <h3 className="text-[#71707d] font-bold text-[11px] uppercase tracking-wider mb-2.5">
+                    CURRENT STATE (MEMORY)
                   </h3>
-                  <p className="text-sm font-mono text-[var(--text-primary)] leading-relaxed">
+                  <p className="text-[14.5px] font-mono text-white/90 leading-[1.6] whitespace-pre-wrap">
                     {currentState}
                   </p>
                 </div>
