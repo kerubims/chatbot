@@ -88,6 +88,30 @@ Di browser smartphone/laptop lain, masukkan alamat IP tersebut dengan port 3000:
 
 ---
 
+## 🐳 Deployment (Docker)
+
+Untuk mendeploy aplikasi ini ke production server menggunakan Docker, ikuti langkah-langkah berikut:
+
+### 1. Build Docker Image
+Jalankan perintah berikut di direktori project untuk mem-build image Docker dengan nama `uchat`:
+```bash
+docker build -t uchat .
+```
+
+### 2. Jalankan Container
+Jalankan container dari image yang telah dibuat. Karena aplikasi akan berjalan di port **9010**, gunakan flag `-p 9010:9010` dan jangan lupa menyertakan file `.env`:
+```bash
+docker run -d -p 9010:9010 --env-file .env --name chat-app uchat
+```
+> [!IMPORTANT]
+> Pastikan `DATABASE_URL` di dalam file `.env` Anda dapat diakses dari dalam container Docker. Jika database Anda berada di server yang sama, gunakan alamat IP mesin tersebut (bukan `localhost`).
+
+### 3. Akses Aplikasi
+Aplikasi sekarang dapat diakses melalui browser di alamat:
+`http://<IP_SERVER>:9010`
+
+---
+
 ## 🏗️ Struktur Project
 - `/app`: Routing dan UI Next.js (App Router).
 - `/prisma`: Schema database dan file migrasi.
@@ -100,5 +124,4 @@ Di browser smartphone/laptop lain, masukkan alamat IP tersebut dengan port 3000:
 Project ini dibuat untuk keperluan pengembangan dan pembelajaran.
 
 ---
-*Dibuat dengan ❤️ oleh Antigravity.*
 
