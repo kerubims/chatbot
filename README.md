@@ -54,6 +54,13 @@ npx prisma migrate dev --name init
 npx prisma db seed
 ```
 
+> [!NOTE]
+> Jika Anda sudah menambahkan atau mengubah karakter di lokal dan ingin memindahkannya ke server, Anda bisa mengekspor data tersebut menjadi file statis sebelum mem-push ke repository:
+> ```bash
+> npm run export-db
+> ```
+> Saat di-deploy di server, perintah `npx prisma db seed` akan otomatis membaca data hasil ekspor ini.
+
 ### 5. Jalankan Aplikasi
 ```bash
 npm run dev
