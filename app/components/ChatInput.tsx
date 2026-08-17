@@ -5,11 +5,12 @@ import { useState, useRef, useEffect } from "react";
 interface ChatInputProps {
   onSend: (message: string) => void;
   disabled?: boolean;
+  isStreaming?: boolean;
   onSuggest?: () => void;
   isLoadingSuggestions?: boolean;
 }
 
-export default function ChatInput({ onSend, disabled, onSuggest, isLoadingSuggestions }: ChatInputProps) {
+export default function ChatInput({ onSend, disabled, isStreaming, onSuggest, isLoadingSuggestions }: ChatInputProps) {
   const [input, setInput] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -54,7 +55,7 @@ export default function ChatInput({ onSend, disabled, onSuggest, isLoadingSugges
   
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!input.trim() || disabled) return;
+    if (!input.trim() || disabled || isStreaming) return;
     onSend(input.trim());
     setInput("");
   };
@@ -118,10 +119,10 @@ export default function ChatInput({ onSend, disabled, onSuggest, isLoadingSugges
         <button
           type="button"
           onClick={onSuggest}
-          disabled={disabled || isLoadingSuggestions || !onSuggest}
+          disabled={disabled || isStreaming || isLoadingSuggestions || !onSuggest}
           title="Suggestion/Idea"
           className="p-1 text-[#a78bfa] hover:text-white hover:bg-white/10 rounded-full transition-colors flex items-center justify-center"
-          style={{ opacity: disabled || isLoadingSuggestions ? 0.5 : 1, width: "36px", height: "36px" }}
+          style={{ opacity: disabled || isStreaming || isLoadingSuggestions ? 0.5 : 1, width: "36px", height: "36px" }}
         >
           {isLoadingSuggestions ? (
             <svg className="animate-spin w-5 h-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
@@ -141,13 +142,13 @@ export default function ChatInput({ onSend, disabled, onSuggest, isLoadingSugges
 
         <button
           type="submit"
-          disabled={disabled || !input.trim()}
+          disabled={disabled || isStreaming || !input.trim()}
           className="bg-[#9f7aea] hover:bg-[#8b5cf6] text-white rounded-[14px] flex items-center justify-center transition-colors"
           style={{
             width: "40px",
             height: "40px",
-            opacity: disabled || !input.trim() ? 0.5 : 1,
-            cursor: disabled || !input.trim() ? "not-allowed" : "pointer",
+            opacity: disabled || isStreaming || !input.trim() ? 0.5 : 1,
+            cursor: disabled || isStreaming || !input.trim() ? "not-allowed" : "pointer",
           }}
         >
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">

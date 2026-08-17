@@ -22,6 +22,8 @@ interface SessionSidebarProps {
   characterName: string;
   temperature: number;
   setTemperature: (v: number) => void;
+  selectedModel?: string;
+  setSelectedModel?: (m: string) => void;
   usageStats?: UsageStats;
   isOpen?: boolean;
   onClose?: () => void;
@@ -36,6 +38,8 @@ export default function SessionSidebar({
   characterName,
   temperature,
   setTemperature,
+  selectedModel,
+  setSelectedModel,
   usageStats,
   isOpen = true,
   onClose,
@@ -183,6 +187,37 @@ export default function SessionSidebar({
               className="w-full accent-[var(--accent-primary)] h-1 bg-[var(--bg-card)] rounded-lg appearance-none cursor-pointer"
             />
           </div>
+
+          {/* Model Selection */}
+          {selectedModel && setSelectedModel && (
+            <div className="flex flex-col gap-1.5 mt-2">
+              <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)]">
+                AI Model
+              </label>
+              <div className="flex bg-[var(--bg-card)] rounded-lg p-0.5">
+                <button
+                  onClick={() => setSelectedModel("stheno")}
+                  className={`flex-1 py-1.5 text-[11px] font-medium rounded-md transition-colors ${
+                    selectedModel === "stheno"
+                      ? "bg-[var(--accent-primary)] text-white shadow-sm"
+                      : "text-[var(--text-secondary)] hover:text-white"
+                  }`}
+                >
+                  Stheno
+                </button>
+                <button
+                  onClick={() => setSelectedModel("lunaris")}
+                  className={`flex-1 py-1.5 text-[11px] font-medium rounded-md transition-colors ${
+                    selectedModel === "lunaris"
+                      ? "bg-[var(--accent-primary)] text-white shadow-sm"
+                      : "text-[var(--text-secondary)] hover:text-white"
+                  }`}
+                >
+                  Lunaris
+                </button>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Usage Stats */}

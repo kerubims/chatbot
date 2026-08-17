@@ -81,6 +81,7 @@ export default function ChatPage({
 
   // Settings
   const [temperature, setTemperature] = useState(0.8);
+  const [selectedModel, setSelectedModel] = useState<string>("stheno");
   
   // Mobile sidebar
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -208,6 +209,155 @@ export default function ChatPage({
   };
 
   // ── SSE Streaming Message Handler ──────────────────────────
+  const handleRegenerate = async (messageId: string) => {
+    if (!activeSessionId || isStreaming) return;
+    
+    setError(null);
+    setRateLimitCountdown(null);
+    setIsStreaming(true);
+
+    const targetIndex = messages.findIndex((m) => m.id === messageId);
+    if (targetIndex === -1) {
+      setIsStreaming(false);
+      return;
+    }
+
+    // Keep messages before the target message
+    const updatedMessages = messages.slice(0, targetIndex);
+    setMessages(updatedMessages);
+    setSuggestions([]);
+    setShowSuggestions(false);
+
+    // Create a placeholder assistant message for streaming
+    const assistantId = (Date.now() + 1).toString();
+    const assistantMessage = {
+      id: assistantId,
+      role: "assistant",
+      content: "",
+      createdAt: new Date(),
+      isStreaming: true,
+      isRegenerating: true,
+    };
+    setMessages((prev) => [...prev, assistantMessage]);
+
+    try {
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: updatedMessages,
+          characterId,
+          sessionId: activeSessionId,
+          temperature,
+          model: selectedModel,
+          isRegenerate: true,
+          messageIdToReplace: messageId,
+        }),
+      });
+
+      // Handle rate limiting
+      if (res.status === 429) {
+        const data = await res.json();
+        setRateLimitCountdown(data.retryAfter || 60);
+        setMessages((prev) => prev.filter((m) => m.id !== assistantId));
+        setIsStreaming(false);
+        return;
+      }
+
+      if (!res.ok) {
+        throw new Error(await res.text());
+      }
+
+      // Read SSE stream
+      const reader = res.body!.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed || !trimmed.startsWith("data: ")) continue;
+
+          try {
+            const event = JSON.parse(trimmed.slice(6));
+
+            if (event.type === "token") {
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === assistantId
+                    ? { ...m, content: m.content + event.content }
+                    : m
+                )
+              );
+            } else if (event.type === "done") {
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === assistantId
+                    ? { ...m, id: event.db_id || m.id, content: event.reply, isStreaming: false }
+                    : m
+                )
+              );
+
+              setAffinityLevel(event.affinity_level);
+              setAffinityExp(event.affinity_exp);
+
+              if (event.exp_change !== 0) {
+                setToastExp(event.exp_change);
+              }
+              if (event.leveledUp) {
+                setShowLevelUp(event.affinity_level);
+              }
+
+              if (event.usage) {
+                setUsage((prev) => {
+                  const newUsage = {
+                    promptTokens: prev.promptTokens + event.usage.prompt_tokens,
+                    completionTokens: prev.completionTokens + event.usage.completion_tokens,
+                    totalCost: prev.totalCost + (event.cost || 0),
+                    lastChatTokens: event.usage.total_tokens || 0,
+                  };
+                  // Sync usage back to sessions state so it persists on switch
+                  setSessions((sPrev) => sPrev.map(s => s.id === activeSessionId ? {
+                    ...s,
+                    total_prompt_tokens: newUsage.promptTokens,
+                    total_completion_tokens: newUsage.completionTokens,
+                    total_cost_usd: newUsage.totalCost
+                  } : s));
+                  return newUsage;
+                });
+              }
+            } else if (event.type === "error") {
+              throw new Error(event.message);
+            }
+          } catch (parseErr: any) {
+            if (parseErr.message && !trimmed.includes('"type":"token"')) {
+              console.warn("SSE parse issue:", parseErr.message);
+            }
+          }
+        }
+      }
+    } catch (err: any) {
+      console.error("Gagal mengirim pesan", err);
+      setError(err);
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === assistantId
+            ? { ...m, isStreaming: false, content: m.content || "" }
+            : m
+        )
+      );
+    } finally {
+      setIsStreaming(false);
+    }
+  };
+
   const handleSendMessage = async (text: string) => {
     if (!activeSessionId || isStreaming) return;
     
@@ -247,6 +397,7 @@ export default function ChatPage({
           characterId,
           sessionId: activeSessionId,
           temperature,
+          model: selectedModel,
         }),
       });
 
@@ -298,7 +449,7 @@ export default function ChatPage({
               setMessages((prev) =>
                 prev.map((m) =>
                   m.id === assistantId
-                    ? { ...m, content: event.reply, isStreaming: false }
+                    ? { ...m, id: event.db_id || m.id, content: event.reply, isStreaming: false }
                     : m
                 )
               );
@@ -316,12 +467,22 @@ export default function ChatPage({
 
               // Update usage stats
               if (event.usage) {
-                setUsage((prev) => ({
-                  promptTokens: prev.promptTokens + event.usage.prompt_tokens,
-                  completionTokens: prev.completionTokens + event.usage.completion_tokens,
-                  totalCost: prev.totalCost + (event.cost || 0),
-                  lastChatTokens: event.usage.total_tokens || 0,
-                }));
+                setUsage((prev) => {
+                  const newUsage = {
+                    promptTokens: prev.promptTokens + event.usage.prompt_tokens,
+                    completionTokens: prev.completionTokens + event.usage.completion_tokens,
+                    totalCost: prev.totalCost + (event.cost || 0),
+                    lastChatTokens: event.usage.total_tokens || 0,
+                  };
+                  // Sync usage back to sessions state so it persists on switch
+                  setSessions((sPrev) => sPrev.map(s => s.id === activeSessionId ? {
+                    ...s,
+                    total_prompt_tokens: newUsage.promptTokens,
+                    total_completion_tokens: newUsage.completionTokens,
+                    total_cost_usd: newUsage.totalCost
+                  } : s));
+                  return newUsage;
+                });
               }
             } else if (event.type === "error") {
               throw new Error(event.message);
@@ -373,6 +534,7 @@ export default function ChatPage({
         body: JSON.stringify({
           sessionId: activeSessionId,
           characterId,
+          model: selectedModel,
         }),
       });
       
@@ -440,6 +602,8 @@ export default function ChatPage({
         characterName={character.name}
         temperature={temperature}
         setTemperature={setTemperature}
+        selectedModel={selectedModel}
+        setSelectedModel={setSelectedModel}
         usageStats={usage}
         isOpen={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
@@ -535,6 +699,7 @@ export default function ChatPage({
           {messages.map((msg) => (
             <ChatMessage
               key={msg.id}
+              id={msg.id}
               role={msg.role as "user" | "assistant"}
               content={msg.content || ""}
               characterName={
@@ -542,6 +707,8 @@ export default function ChatPage({
               }
               avatarUrl={msg.role === "assistant" ? character.avatar_url : undefined}
               isStreaming={msg.isStreaming}
+              isRegenerating={msg.isRegenerating}
+              onRegenerate={msg.role === "assistant" ? handleRegenerate : undefined}
             />
           ))}
           {isStreaming && messages[messages.length - 1]?.content === "" && (
@@ -643,7 +810,8 @@ export default function ChatPage({
 
           <ChatInput
             onSend={handleSendMessage}
-            disabled={isStreaming || !activeSessionId || (rateLimitCountdown !== null && rateLimitCountdown > 0)}
+            disabled={!activeSessionId || (rateLimitCountdown !== null && rateLimitCountdown > 0)}
+            isStreaming={isStreaming}
             onSuggest={handleSuggest}
             isLoadingSuggestions={isLoadingSuggestions}
           />

@@ -1,11 +1,11 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { DEFAULT_MODEL, NOVITA_SERVERLESS_BASE_URL } from "@/lib/novita";
+import { DEFAULT_MODEL, NOVITA_SERVERLESS_BASE_URL, AVAILABLE_MODELS, ModelKey } from "@/lib/novita";
 import { fetchWithRetry } from "@/lib/retry";
 
 export async function POST(req: Request) {
   try {
-    const { sessionId, characterId } = await req.json();
+    const { sessionId, characterId, model } = await req.json();
 
     if (!sessionId || !characterId) {
       return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
@@ -37,8 +37,10 @@ Make the suggestions brief, distinct from each other, and fitting the tone of th
 Format your output ONLY as a valid JSON array of strings. Do not include markdown formatting or explanations.
 Example: ["What do you mean by that?", "*nods slowly* I understand.", "Let's go then."]`;
 
+    const resolvedModel = AVAILABLE_MODELS[(model as ModelKey)] || DEFAULT_MODEL;
+
     const payload = {
-      model: DEFAULT_MODEL,
+      model: resolvedModel,
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: `Recent conversation:\n${chatHistory}\n\nProvide 3 suggestions for the User:` }
@@ -103,7 +105,7 @@ Example: ["What do you mean by that?", "*nods slowly* I understand.", "Let's go 
             completion_tokens: usageData.completion_tokens,
             total_tokens: usageData.total_tokens,
             cost_usd: cost,
-            model: DEFAULT_MODEL,
+            model: resolvedModel,
           },
         })
       ]);

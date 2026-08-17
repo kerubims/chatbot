@@ -7,7 +7,7 @@ import {
   calculateNewLevel,
   SUMMARY_TRIGGER_COUNT 
 } from "@/lib/affinity";
-import { DEFAULT_MODEL, NOVITA_SERVERLESS_BASE_URL } from "@/lib/novita";
+import { DEFAULT_MODEL, NOVITA_SERVERLESS_BASE_URL, AVAILABLE_MODELS, ModelKey } from "@/lib/novita";
 import { generateAutoSummary } from "./summarize";
 import { rateLimit } from "@/lib/rate-limit";
 import { fetchWithRetry } from "@/lib/retry";
@@ -55,11 +55,14 @@ export async function POST(req: Request) {
       );
     }
 
-    const { messages, sessionId, characterId, temperature } = (await req.json()) as {
+    const { messages, sessionId, characterId, temperature, model, isRegenerate, messageIdToReplace } = (await req.json()) as {
       messages: UIMessage[];
       sessionId: string;
       characterId: string;
       temperature?: number;
+      model?: string;
+      isRegenerate?: boolean;
+      messageIdToReplace?: string;
     };
 
     // 1. Fetch character and session data concurrently
@@ -146,7 +149,12 @@ export async function POST(req: Request) {
 7. Avoid purple prose, repetitive actions, and overly poetic descriptions. Be concise and natural.
 8. Plain text output only. No JSON.`;
 
-    systemPromptParts.push(responseInstructions);
+    let finalResponseInstructions = responseInstructions;
+    if (isRegenerate) {
+      finalResponseInstructions += `\n9. STRICT RULE: You MUST keep your reply under 2 sentences! Be extremely concise and straight to the point.`;
+    }
+
+    systemPromptParts.push(finalResponseInstructions);
 
     // --- Dynamic Placeholder Replacement ---
     let charBackstory = character.backstory || character.persona || "";
@@ -176,17 +184,33 @@ export async function POST(req: Request) {
     
     const block3 = `User Profile:\n${userInfoParts.join(" ")}\nStyle: ${userProfile?.response_style || "Normal"}`.trim();
     
-    const block4 = `Directives:\n${charDirectives}\n${charExample}\n${responseInstructions}`.trim();
+    const block4 = `Directives:\n${charDirectives}\n${charExample}\n${finalResponseInstructions}`.trim();
 
     const systemPrompt = [block1, block2, block3, block4].join("\n\n");
 
-    // 4. Save user message to DB
-    const lastUserMessage = messages.filter((m) => m.role === "user").pop();
+    // 4. Save user message to DB or handle regeneration cleanup
     let userText = "";
+    const lastUserMessage = messages.filter((m) => m.role === "user").pop();
     if (lastUserMessage) {
       userText = (lastUserMessage as any).content || 
-        (lastUserMessage.parts?.find((p: any) => p.type === "text") as any)?.text;
-        
+        (lastUserMessage.parts?.find((p: any) => p.type === "text") as any)?.text || "";
+    }
+
+    if (isRegenerate && messageIdToReplace) {
+      const targetMessage = await prisma.message.findUnique({
+        where: { id: messageIdToReplace }
+      });
+      if (targetMessage) {
+        await prisma.message.deleteMany({
+          where: {
+            session_id: sessionId,
+            created_at: {
+              gte: targetMessage.created_at
+            }
+          }
+        });
+      }
+    } else {
       if (userText) {
         await prisma.message.create({
           data: { session_id: sessionId, role: "user", content: userText },
@@ -194,11 +218,11 @@ export async function POST(req: Request) {
       }
     }
 
-    // 5. Fetch last 10 messages from DB for context (Reduced from 20 to save tokens)
+    // 5. Fetch last 14 messages from DB for context
     const dbMessages = await prisma.message.findMany({
       where: { session_id: sessionId },
       orderBy: { created_at: "desc" },
-      take: 10,
+      take: 14,
     });
     
     // Reverse so they are in chronological order (oldest -> newest) for the AI prompt
@@ -215,8 +239,10 @@ export async function POST(req: Request) {
 
     const endpointUrl = `${NOVITA_SERVERLESS_BASE_URL}/chat/completions`;
 
+    const resolvedModel = AVAILABLE_MODELS[(model as ModelKey)] || DEFAULT_MODEL;
+
     const payload = {
-      model: DEFAULT_MODEL,
+      model: resolvedModel,
       messages: [
         { role: "system", content: systemPrompt },
         ...contextMessages
@@ -308,8 +334,9 @@ export async function POST(req: Request) {
           const expChange = calculateExpFromReply(aiReply);
 
           // Save AI reply to DB
+          let aiDbMessage = null;
           if (aiReply) {
-            await prisma.message.create({
+            aiDbMessage = await prisma.message.create({
               data: { 
                 session_id: sessionId, 
                 role: "assistant", 
@@ -352,7 +379,7 @@ export async function POST(req: Request) {
                 completion_tokens: usageData.completion_tokens,
                 total_tokens: usageData.total_tokens,
                 cost_usd: cost,
-                model: DEFAULT_MODEL,
+                model: resolvedModel,
               },
             });
           }
@@ -377,6 +404,7 @@ export async function POST(req: Request) {
             encoder.encode(`data: ${JSON.stringify({
               type: "done",
               reply: aiReply,
+              db_id: aiDbMessage?.id,
               exp_change: expChange,
               affinity_level: newLevel,
               affinity_exp: newExp,
