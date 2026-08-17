@@ -74,6 +74,11 @@ export default function ChatPage({
   const [showStoryViewer, setShowStoryViewer] = useState(false);
   const [showTokenModal, setShowTokenModal] = useState(false);
 
+  // Suggestions
+  const [suggestions, setSuggestions] = useState<string[]>([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const [isLoadingSuggestions, setIsLoadingSuggestions] = useState(false);
+
   // Settings
   const [temperature, setTemperature] = useState(0.8);
   
@@ -219,6 +224,8 @@ export default function ChatPage({
     
     const updatedMessages = [...messages, userMessage];
     setMessages(updatedMessages);
+    setSuggestions([]); // Clear suggestions on new message
+    setShowSuggestions(false);
 
     // Create a placeholder assistant message for streaming
     const assistantId = (Date.now() + 1).toString();
@@ -341,6 +348,59 @@ export default function ChatPage({
     } finally {
       setIsStreaming(false);
     }
+  };
+
+  const handleSuggest = async () => {
+    if (suggestions.length > 0) {
+      // Toggle visibility if already loaded
+      setShowSuggestions(!showSuggestions);
+      return;
+    }
+    await handleRefreshSuggestions();
+  };
+
+  const handleRefreshSuggestions = async () => {
+    if (!activeSessionId || !characterId || isStreaming) return;
+    
+    setIsLoadingSuggestions(true);
+    setShowSuggestions(true);
+    setSuggestions([]);
+    
+    try {
+      const res = await fetch("/api/chat/suggest", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sessionId: activeSessionId,
+          characterId,
+        }),
+      });
+      
+      if (res.ok) {
+        const data = await res.json();
+        setSuggestions(data.suggestions || []);
+        
+        // Update usage stats if returned
+        if (data.usage) {
+          setUsage((prev) => ({
+            promptTokens: prev.promptTokens + (data.usage.prompt_tokens || 0),
+            completionTokens: prev.completionTokens + (data.usage.completion_tokens || 0),
+            totalCost: prev.totalCost + (data.cost || 0),
+            lastChatTokens: prev.lastChatTokens, // keep last chat unchanged
+          }));
+        }
+      }
+    } catch (err) {
+      console.error("Failed to fetch suggestions", err);
+    } finally {
+      setIsLoadingSuggestions(false);
+    }
+  };
+
+  const handleSelectSuggestion = (suggestion: string) => {
+    // Dispatch event to ChatInput to set its text
+    window.dispatchEvent(new CustomEvent("setChatInput", { detail: suggestion }));
+    // Note: Do not hide suggestions here, so the user can easily switch to another suggestion.
   };
 
   if (loading) {
@@ -555,9 +615,37 @@ export default function ChatPage({
             </button>
           </div>
 
+          {/* Suggestion Chips */}
+          {suggestions.length > 0 && showSuggestions && (
+            <div className="flex flex-wrap gap-2 px-1 pb-1 animate-fade-in items-center">
+              {suggestions.map((suggestion, idx) => (
+                <button
+                  key={idx}
+                  onClick={() => handleSelectSuggestion(suggestion)}
+                  className="bg-[#28282b]/80 hover:bg-[#3f3f46] text-[#a78bfa] border border-[#a78bfa]/30 px-3 py-1.5 rounded-full text-[13px] text-left transition-colors truncate max-w-full shadow-sm"
+                >
+                  {suggestion}
+                </button>
+              ))}
+              <button
+                onClick={handleRefreshSuggestions}
+                disabled={isLoadingSuggestions}
+                title="Refresh Suggestions"
+                className="p-1.5 text-[#a78bfa] hover:text-white hover:bg-white/10 rounded-full transition-colors ml-1 shrink-0 flex items-center justify-center"
+                style={{ opacity: isLoadingSuggestions ? 0.5 : 1 }}
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className={isLoadingSuggestions ? "animate-spin" : ""}>
+                  <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.59-9.21l5.67-5.67"/>
+                </svg>
+              </button>
+            </div>
+          )}
+
           <ChatInput
             onSend={handleSendMessage}
             disabled={isStreaming || !activeSessionId || (rateLimitCountdown !== null && rateLimitCountdown > 0)}
+            onSuggest={handleSuggest}
+            isLoadingSuggestions={isLoadingSuggestions}
           />
         </div>
 

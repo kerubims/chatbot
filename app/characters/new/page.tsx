@@ -18,6 +18,21 @@ export default function NewCharacterPage() {
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [activeTab, setActiveTab] = useState<"basic" | "advanced">("basic");
+  const [showGenerator, setShowGenerator] = useState(false);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [tokenUsage, setTokenUsage] = useState<{ prompt_tokens: number, completion_tokens: number, total_tokens: number } | null>(null);
+
+  // Field-specific generation state
+  const [generatingFields, setGeneratingFields] = useState<Record<string, boolean>>({});
+  const [fieldTokens, setFieldTokens] = useState<Record<string, { prompt_tokens: number, completion_tokens: number, total_tokens: number }>>({});
+  
+  const [genForm, setGenForm] = useState({
+    role: "",
+    age: "",
+    background: "",
+    personality: "",
+  });
+
   const [form, setForm] = useState({
     name: "",
     avatar_url: "",
@@ -32,7 +47,10 @@ export default function NewCharacterPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!form.name || !form.backstory || !form.greeting) return;
+    if (!form.name || !form.greeting) {
+      alert("Please provide at least a Name and a Greeting Message.");
+      return;
+    }
 
     setSaving(true);
     try {
@@ -45,7 +63,8 @@ export default function NewCharacterPage() {
       if (res.ok) {
         router.push("/characters");
       } else {
-        alert("Failed to create character");
+        const errData = await res.json().catch(() => ({}));
+        alert(`Failed to create character: ${errData.error || "Unknown error"}`);
       }
     } catch (err) {
       console.error(err);
@@ -92,6 +111,70 @@ export default function NewCharacterPage() {
     { id: "advanced" as const, label: "⚙️ Advanced" },
   ];
 
+  const handleGenerate = async () => {
+    setIsGenerating(true);
+    try {
+      const res = await fetch("/api/characters/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(genForm),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        if (data.characterData) {
+          setForm((prev) => ({
+            ...prev,
+            ...data.characterData,
+          }));
+          if (data.usage) {
+            setTokenUsage(data.usage);
+          }
+          setShowGenerator(false); // Hide generator after success
+        } else {
+          alert(`Failed to parse character: ${data.error || "Unknown Error"}`);
+        }
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        alert(`Failed to generate character: ${errData.error || res.statusText}`);
+      }
+    } catch (err: any) {
+      console.error(err);
+      alert(`Error generating character: ${err.message}`);
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  const handleGenerateField = async (field: keyof typeof form) => {
+    setGeneratingFields((prev) => ({ ...prev, [field]: true }));
+    try {
+      const res = await fetch("/api/characters/generate-field", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ field, context: form }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        if (data.content) {
+          setForm((prev) => ({ ...prev, [field]: data.content }));
+        }
+        if (data.usage) {
+          setFieldTokens((prev) => ({ ...prev, [field]: data.usage }));
+        }
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        alert(`Failed to generate ${field}: ${errData.error || res.statusText}`);
+      }
+    } catch (err: any) {
+      console.error(err);
+      alert(`Error generating ${field}: ${err.message}`);
+    } finally {
+      setGeneratingFields((prev) => ({ ...prev, [field]: false }));
+    }
+  };
+
   return (
     <main className="min-h-screen p-6 md:p-10 max-w-3xl mx-auto">
       <Link
@@ -113,6 +196,122 @@ export default function NewCharacterPage() {
       >
         ✨ Create New Character
       </h1>
+
+      {/* AI Generator Toggle */}
+      <div className="mb-6">
+        <button
+          type="button"
+          onClick={() => setShowGenerator(!showGenerator)}
+          className="flex items-center gap-2 px-4 py-2.5 rounded-xl font-medium transition-all w-full md:w-auto justify-center"
+          style={{
+            background: showGenerator ? "var(--bg-card)" : "linear-gradient(135deg, rgba(167, 139, 250, 0.15), rgba(236, 72, 153, 0.15))",
+            color: "var(--text-primary)",
+            border: showGenerator ? "1px solid var(--border-subtle)" : "1px solid rgba(167, 139, 250, 0.3)",
+          }}
+        >
+          <span>🪄</span> {showGenerator ? "Hide Character Generator" : "AI Character Generator"}
+        </button>
+      </div>
+
+      {/* AI Generator Form */}
+      {showGenerator && (
+        <div className="mb-8 p-5 rounded-2xl animate-fade-in border border-[#a78bfa]/20 shadow-[0_0_15px_rgba(167,139,250,0.05)]" style={{ background: "rgba(167, 139, 250, 0.03)" }}>
+          <div className="flex justify-between items-start mb-4">
+            <div>
+              <h3 className="font-semibold text-[var(--accent-primary)] flex items-center gap-2">
+                🪄 Magic Generator
+              </h3>
+              <p className="text-sm text-[var(--text-muted)] mt-1">
+                Fill in what you want, leave the rest blank. The AI will create a complete character suitable for deep/NSFW roleplay.
+              </p>
+            </div>
+          </div>
+          
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-5">
+            <div>
+              <label className="block text-xs font-medium mb-1.5 text-[var(--text-secondary)]">Role / Concept</label>
+              <input
+                type="text"
+                value={genForm.role}
+                onChange={(e) => setGenForm({ ...genForm, role: e.target.value })}
+                placeholder="e.g. Strict librarian, Space Pirate"
+                className="input-field text-sm py-2"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium mb-1.5 text-[var(--text-secondary)]">Age / Appearance</label>
+              <input
+                type="text"
+                value={genForm.age}
+                onChange={(e) => setGenForm({ ...genForm, age: e.target.value })}
+                placeholder="e.g. 20s, tall and imposing"
+                className="input-field text-sm py-2"
+              />
+            </div>
+            <div className="md:col-span-2">
+              <label className="block text-xs font-medium mb-1.5 text-[var(--text-secondary)]">Background Story</label>
+              <textarea
+                value={genForm.background}
+                onChange={(e) => setGenForm({ ...genForm, background: e.target.value })}
+                placeholder="e.g. Exiled from her kingdom after a forbidden ritual..."
+                className="input-field text-sm py-2"
+                rows={2}
+              />
+            </div>
+            <div className="md:col-span-2">
+              <label className="block text-xs font-medium mb-1.5 text-[var(--text-secondary)]">Personality Traits</label>
+              <input
+                type="text"
+                value={genForm.personality}
+                onChange={(e) => setGenForm({ ...genForm, personality: e.target.value })}
+                placeholder="e.g. Cold exterior but secretly needy, dominant, intelligent"
+                className="input-field text-sm py-2"
+              />
+            </div>
+          </div>
+          
+          <button
+            type="button"
+            onClick={handleGenerate}
+            disabled={isGenerating}
+            className="w-full py-2.5 rounded-xl font-semibold transition-all flex justify-center items-center gap-2"
+            style={{
+              background: "linear-gradient(135deg, var(--accent-primary), var(--accent-pink))",
+              color: "white",
+              opacity: isGenerating ? 0.7 : 1,
+            }}
+          >
+            {isGenerating ? (
+              <>
+                <svg className="animate-spin w-4 h-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                Generating Details...
+              </>
+            ) : (
+              "Generate Character Details"
+            )}
+          </button>
+        </div>
+      )}
+
+      {/* Token Usage Display */}
+      {tokenUsage && !showGenerator && (
+        <div className="mb-6 p-3 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] flex items-center justify-between text-sm animate-fade-in">
+          <div className="flex items-center gap-2 text-[var(--text-secondary)]">
+            <span>🪙</span>
+            <span>AI Generation Cost:</span>
+          </div>
+          <div className="flex items-center gap-4 font-mono text-[var(--text-muted)]">
+            <span title="Prompt Tokens">P: {tokenUsage.prompt_tokens}</span>
+            <span title="Completion Tokens">C: {tokenUsage.completion_tokens}</span>
+            <span className="text-[var(--accent-primary)] font-semibold" title="Total Tokens">
+              Total: {tokenUsage.total_tokens}
+            </span>
+          </div>
+        </div>
+      )}
 
       {/* Tabs */}
       <div
@@ -244,12 +443,32 @@ export default function NewCharacterPage() {
 
             {/* Backstory */}
             <div>
-              <label
-                className="block text-sm font-medium mb-2"
-                style={{ color: "var(--text-secondary)" }}
-              >
-                Backstory *
-              </label>
+              <div className="flex items-center justify-between mb-2">
+                <label
+                  className="block text-sm font-medium"
+                  style={{ color: "var(--text-secondary)" }}
+                >
+                  Backstory *
+                </label>
+                <button
+                  type="button"
+                  onClick={() => handleGenerateField("backstory")}
+                  disabled={generatingFields["backstory"]}
+                  className="text-xs flex items-center gap-1.5 px-2.5 py-1 rounded-md transition-colors"
+                  style={{ 
+                    background: "rgba(167, 139, 250, 0.1)", 
+                    color: "var(--accent-primary)",
+                    opacity: generatingFields["backstory"] ? 0.5 : 1
+                  }}
+                  title="Auto-generate this field based on other inputs"
+                >
+                  {generatingFields["backstory"] ? (
+                    <span className="animate-pulse">Generating...</span>
+                  ) : (
+                    <>🪄 <span className="hidden sm:inline">AI Assist</span></>
+                  )}
+                </button>
+              </div>
               <p
                 className="text-xs mb-2"
                 style={{ color: "var(--text-muted)" }}
@@ -265,18 +484,42 @@ export default function NewCharacterPage() {
                 placeholder={`Luna is a mysterious sorceress from an ancient magical academy. She was exiled after discovering forbidden knowledge about the nature of reality. She speaks with elegance and occasional dry wit. She is deeply knowledgeable about arcane arts and enjoys testing others through riddles and moral dilemmas. She has a scar across her left eye from a magical duel she refuses to discuss.`}
                 className="input-field"
                 rows={8}
-                required
               />
+              {fieldTokens["backstory"] && (
+                <div className="text-[10px] text-right mt-1 font-mono animate-fade-in" style={{ color: "var(--text-muted)" }}>
+                  Token Usage: {fieldTokens["backstory"].total_tokens} (P:{fieldTokens["backstory"].prompt_tokens} C:{fieldTokens["backstory"].completion_tokens})
+                </div>
+              )}
             </div>
 
             {/* Greeting */}
             <div>
-              <label
-                className="block text-sm font-medium mb-2"
-                style={{ color: "var(--text-secondary)" }}
-              >
-                Greeting Message *
-              </label>
+              <div className="flex items-center justify-between mb-2">
+                <label
+                  className="block text-sm font-medium"
+                  style={{ color: "var(--text-secondary)" }}
+                >
+                  Greeting Message *
+                </label>
+                <button
+                  type="button"
+                  onClick={() => handleGenerateField("greeting")}
+                  disabled={generatingFields["greeting"]}
+                  className="text-xs flex items-center gap-1.5 px-2.5 py-1 rounded-md transition-colors"
+                  style={{ 
+                    background: "rgba(167, 139, 250, 0.1)", 
+                    color: "var(--accent-primary)",
+                    opacity: generatingFields["greeting"] ? 0.5 : 1
+                  }}
+                  title="Auto-generate this field based on other inputs"
+                >
+                  {generatingFields["greeting"] ? (
+                    <span className="animate-pulse">Generating...</span>
+                  ) : (
+                    <>🪄 <span className="hidden sm:inline">AI Assist</span></>
+                  )}
+                </button>
+              </div>
               <p
                 className="text-xs mb-2"
                 style={{ color: "var(--text-muted)" }}
@@ -293,6 +536,11 @@ export default function NewCharacterPage() {
                 rows={5}
                 required
               />
+              {fieldTokens["greeting"] && (
+                <div className="text-[10px] text-right mt-1 font-mono animate-fade-in" style={{ color: "var(--text-muted)" }}>
+                  Token Usage: {fieldTokens["greeting"].total_tokens} (P:{fieldTokens["greeting"].prompt_tokens} C:{fieldTokens["greeting"].completion_tokens})
+                </div>
+              )}
             </div>
           </>
         )}
@@ -302,18 +550,38 @@ export default function NewCharacterPage() {
           <>
             {/* Key Memories */}
             <div>
-              <label
-                className="block text-sm font-medium mb-2"
-                style={{ color: "var(--text-secondary)" }}
-              >
-                Key Memories
-                <span
-                  className="ml-2 text-xs font-normal"
-                  style={{ color: "var(--text-muted)" }}
+              <div className="flex items-center justify-between mb-2">
+                <label
+                  className="block text-sm font-medium"
+                  style={{ color: "var(--text-secondary)" }}
                 >
-                  (optional)
-                </span>
-              </label>
+                  Key Memories
+                  <span
+                    className="ml-2 text-xs font-normal"
+                    style={{ color: "var(--text-muted)" }}
+                  >
+                    (optional)
+                  </span>
+                </label>
+                <button
+                  type="button"
+                  onClick={() => handleGenerateField("key_memories")}
+                  disabled={generatingFields["key_memories"]}
+                  className="text-xs flex items-center gap-1.5 px-2.5 py-1 rounded-md transition-colors"
+                  style={{ 
+                    background: "rgba(167, 139, 250, 0.1)", 
+                    color: "var(--accent-primary)",
+                    opacity: generatingFields["key_memories"] ? 0.5 : 1
+                  }}
+                  title="Auto-generate this field based on other inputs"
+                >
+                  {generatingFields["key_memories"] ? (
+                    <span className="animate-pulse">Generating...</span>
+                  ) : (
+                    <>🪄 <span className="hidden sm:inline">AI Assist</span></>
+                  )}
+                </button>
+              </div>
               <p
                 className="text-xs mb-2"
                 style={{ color: "var(--text-muted)" }}
@@ -333,22 +601,47 @@ export default function NewCharacterPage() {
                 className="input-field"
                 rows={5}
               />
+              {fieldTokens["key_memories"] && (
+                <div className="text-[10px] text-right mt-1 font-mono animate-fade-in" style={{ color: "var(--text-muted)" }}>
+                  Token Usage: {fieldTokens["key_memories"].total_tokens} (P:{fieldTokens["key_memories"].prompt_tokens} C:{fieldTokens["key_memories"].completion_tokens})
+                </div>
+              )}
             </div>
 
             {/* Scenario */}
             <div>
-              <label
-                className="block text-sm font-medium mb-2"
-                style={{ color: "var(--text-secondary)" }}
-              >
-                Current Scenario
-                <span
-                  className="ml-2 text-xs font-normal"
-                  style={{ color: "var(--text-muted)" }}
+              <div className="flex items-center justify-between mb-2">
+                <label
+                  className="block text-sm font-medium"
+                  style={{ color: "var(--text-secondary)" }}
                 >
-                  (optional)
-                </span>
-              </label>
+                  Current Scenario
+                  <span
+                    className="ml-2 text-xs font-normal"
+                    style={{ color: "var(--text-muted)" }}
+                  >
+                    (optional)
+                  </span>
+                </label>
+                <button
+                  type="button"
+                  onClick={() => handleGenerateField("scenario")}
+                  disabled={generatingFields["scenario"]}
+                  className="text-xs flex items-center gap-1.5 px-2.5 py-1 rounded-md transition-colors"
+                  style={{ 
+                    background: "rgba(167, 139, 250, 0.1)", 
+                    color: "var(--accent-primary)",
+                    opacity: generatingFields["scenario"] ? 0.5 : 1
+                  }}
+                  title="Auto-generate this field based on other inputs"
+                >
+                  {generatingFields["scenario"] ? (
+                    <span className="animate-pulse">Generating...</span>
+                  ) : (
+                    <>🪄 <span className="hidden sm:inline">AI Assist</span></>
+                  )}
+                </button>
+              </div>
               <p
                 className="text-xs mb-2"
                 style={{ color: "var(--text-muted)" }}
@@ -365,22 +658,47 @@ export default function NewCharacterPage() {
                 className="input-field"
                 rows={4}
               />
+              {fieldTokens["scenario"] && (
+                <div className="text-[10px] text-right mt-1 font-mono animate-fade-in" style={{ color: "var(--text-muted)" }}>
+                  Token Usage: {fieldTokens["scenario"].total_tokens} (P:{fieldTokens["scenario"].prompt_tokens} C:{fieldTokens["scenario"].completion_tokens})
+                </div>
+              )}
             </div>
 
             {/* Response Directives */}
             <div>
-              <label
-                className="block text-sm font-medium mb-2"
-                style={{ color: "var(--text-secondary)" }}
-              >
-                Response Directives
-                <span
-                  className="ml-2 text-xs font-normal"
-                  style={{ color: "var(--text-muted)" }}
+              <div className="flex items-center justify-between mb-2">
+                <label
+                  className="block text-sm font-medium"
+                  style={{ color: "var(--text-secondary)" }}
                 >
-                  (optional)
-                </span>
-              </label>
+                  Response Directives
+                  <span
+                    className="ml-2 text-xs font-normal"
+                    style={{ color: "var(--text-muted)" }}
+                  >
+                    (optional)
+                  </span>
+                </label>
+                <button
+                  type="button"
+                  onClick={() => handleGenerateField("response_directives")}
+                  disabled={generatingFields["response_directives"]}
+                  className="text-xs flex items-center gap-1.5 px-2.5 py-1 rounded-md transition-colors"
+                  style={{ 
+                    background: "rgba(167, 139, 250, 0.1)", 
+                    color: "var(--accent-primary)",
+                    opacity: generatingFields["response_directives"] ? 0.5 : 1
+                  }}
+                  title="Auto-generate this field based on other inputs"
+                >
+                  {generatingFields["response_directives"] ? (
+                    <span className="animate-pulse">Generating...</span>
+                  ) : (
+                    <>🪄 <span className="hidden sm:inline">AI Assist</span></>
+                  )}
+                </button>
+              </div>
               <p
                 className="text-xs mb-2"
                 style={{ color: "var(--text-muted)" }}
@@ -402,22 +720,47 @@ export default function NewCharacterPage() {
                 className="input-field"
                 rows={5}
               />
+              {fieldTokens["response_directives"] && (
+                <div className="text-[10px] text-right mt-1 font-mono animate-fade-in" style={{ color: "var(--text-muted)" }}>
+                  Token Usage: {fieldTokens["response_directives"].total_tokens} (P:{fieldTokens["response_directives"].prompt_tokens} C:{fieldTokens["response_directives"].completion_tokens})
+                </div>
+              )}
             </div>
 
             {/* Example Dialogue */}
             <div>
-              <label
-                className="block text-sm font-medium mb-2"
-                style={{ color: "var(--text-secondary)" }}
-              >
-                Example Dialogue
-                <span
-                  className="ml-2 text-xs font-normal"
-                  style={{ color: "var(--text-muted)" }}
+              <div className="flex items-center justify-between mb-2">
+                <label
+                  className="block text-sm font-medium"
+                  style={{ color: "var(--text-secondary)" }}
                 >
-                  (optional)
-                </span>
-              </label>
+                  Example Dialogue
+                  <span
+                    className="ml-2 text-xs font-normal"
+                    style={{ color: "var(--text-muted)" }}
+                  >
+                    (optional)
+                  </span>
+                </label>
+                <button
+                  type="button"
+                  onClick={() => handleGenerateField("example_dialogue")}
+                  disabled={generatingFields["example_dialogue"]}
+                  className="text-xs flex items-center gap-1.5 px-2.5 py-1 rounded-md transition-colors"
+                  style={{ 
+                    background: "rgba(167, 139, 250, 0.1)", 
+                    color: "var(--accent-primary)",
+                    opacity: generatingFields["example_dialogue"] ? 0.5 : 1
+                  }}
+                  title="Auto-generate this field based on other inputs"
+                >
+                  {generatingFields["example_dialogue"] ? (
+                    <span className="animate-pulse">Generating...</span>
+                  ) : (
+                    <>🪄 <span className="hidden sm:inline">AI Assist</span></>
+                  )}
+                </button>
+              </div>
               <p
                 className="text-xs mb-2"
                 style={{ color: "var(--text-muted)" }}
@@ -438,6 +781,11 @@ Luna: *her composure cracks for just a moment, genuine surprise flickering acros
                 className="input-field"
                 rows={8}
               />
+              {fieldTokens["example_dialogue"] && (
+                <div className="text-[10px] text-right mt-1 font-mono animate-fade-in" style={{ color: "var(--text-muted)" }}>
+                  Token Usage: {fieldTokens["example_dialogue"].total_tokens} (P:{fieldTokens["example_dialogue"].prompt_tokens} C:{fieldTokens["example_dialogue"].completion_tokens})
+                </div>
+              )}
             </div>
           </>
         )}

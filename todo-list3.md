@@ -1,0 +1,1 @@
+1. penulisan API novita tidak lagi di env, melainkan user input dan disimpan di database. jadi jika api novita ganti, tinggal diubah via UI tanpa mengubah env. apakah ini efektif?
