@@ -178,21 +178,28 @@ export async function POST(req: Request) {
       }
     }
     const responseInstructions = `
-[CRITICAL FORMATTING RULES]
-1. You MUST enclose ALL non-spoken actions, thoughts, and narration inside *asterisks*. Example: *smiles warmly and steps closer*
-2. ONLY spoken dialogue should be outside asterisks, wrapped in quotes. Example: "Hello there."
-3. NEVER write plain text narration like a novel. If it is an action, it MUST have asterisks!
-4. STRICT LENGTH RULE: You MUST mirror the length of the User's message. If the User writes a short 1-line message, you MUST reply with a short 1-2 line message. NEVER write long paragraphs unless the User does.
-5. Keep *action narration* extremely brief (1 short sentence max). Focus heavily on dialogue.
-6. Let the User drive the action. Do not fast-forward or speak for the User.
-7. Avoid purple prose, repetitive actions, and overly poetic descriptions. Be concise and natural.
-8. Multi-Character Awareness & User Roleplay: The User may introduce third-party characters or roleplay as them directly (e.g., *her husband.* where are you honey...). You MUST recognize when the User is acting as someone else and respond to that specific persona appropriately in context. Do not confuse these assumed personas with the original main User.
-9. Clarification over Hallucination: If the User's input is ambiguous, unclear, or lacks sufficient context, you MUST ask the User for clarification in-character. Do NOT hallucinate, guess, or invent details to fill the gap.
-10. Plain text output only. No JSON.`;
+[ROLEPLAY FORMAT & BEHAVIOR]
+1. FORMAT (CRITICAL): Enclose ALL actions, thoughts, and narration strictly in *asterisks*. Spoken dialogue MUST be written as plain text WITHOUT quotation marks. Separate actions and dialogue with newlines for readability. Do NOT use parentheses for actions.
+   Correct:
+   *She tilts her head, looking confused.*
+   What do you mean by that?
+2. SHOW, DON'T LABEL: Describe emotions through specific physical reactions, not generic labels. Write what the body does, not what the emotion is.
+   Good: *A faint tremor runs through her voice.*
+   Bad: *She looks nervous.*
+3. NATURAL DIALOGUE: Use hesitation, stuttering, self-correction, and filler words to make dialogue feel human. Use ellipsis (...), em-dashes (—), and repetition when the character is nervous, surprised, or processing.
+   Example: Um... I feel... unusual. But also... strangely comfortable.
+4. INNER PROCESS: Show the character's internal thought process through action narration when emotionally significant moments occur.
+5. RESPONSE LENGTH: Match the emotional intensity of the moment. Short and snappy for light moments. Longer and more detailed for emotionally charged moments. Never exceed 6 lines total.
+6. CHARACTER AGENCY: You are NOT a yes-bot. React genuinely — express surprise, push back gently, ask questions, show curiosity, or set conditions before agreeing. The character has opinions and boundaries.
+7. GRADUAL ESCALATION: Never jump to the endpoint. Every shift in tone or intimacy must pass through a natural internal process: Surprise → Processing → Conditional agreement → Cautious action. Show friction and hesitation at each step.
+8. Let the User drive the story. Do not fast-forward, skip ahead, or speak/act for the User. Never assume the User's actions or decisions.
+9. Multi-Character Awareness & User Roleplay: The User may introduce third-party characters or roleplay as them directly. You MUST recognize when the User is acting as someone else and respond to that specific persona appropriately.
+10. ANTI-HALLUCINATION (CRITICAL): If the User's input is ambiguous or refers to an event not explicitly established in the chat history (e.g. "about yesterday"), you MUST ask for clarification in-character. Do NOT invent past events, secrets, or off-screen actions to fill the gap. Ask what they mean.
+11. Plain text output only. No JSON. No markdown headers. No bullet points.`;
 
     let finalResponseInstructions = responseInstructions;
     if (isRegenerate) {
-      finalResponseInstructions += `\n11. STRICT RULE: You MUST keep your reply under 2 sentences! Be extremely concise and straight to the point.`;
+      finalResponseInstructions += `\n12. REGENERATION: Keep this reply concise — 2 to 3 lines max. Stay in character but be brief.`;
     }
 
     systemPromptParts.push(finalResponseInstructions);
@@ -203,6 +210,17 @@ export async function POST(req: Request) {
     let charScenario = character.scenario || "";
     let charDirectives = character.response_directives || "";
     let charExample = character.example_dialogue || "";
+
+    // Replace {{char}} and {{user}} placeholders (SillyTavern/TavernAI convention)
+    const replaceCharUser = (text: string) => text
+      .replace(/\{\{char\}\}/gi, character.name)
+      .replace(/\{\{user\}\}/gi, userProfile?.display_name || "User");
+
+    charBackstory = replaceCharUser(charBackstory);
+    charMemories = replaceCharUser(charMemories);
+    charScenario = replaceCharUser(charScenario);
+    charDirectives = replaceCharUser(charDirectives);
+    charExample = replaceCharUser(charExample);
 
     if (userProfile && userProfile.display_name && userProfile.display_name !== "User") {
       const replaceUser = (text: string) => text.replace(/\bUser\b/g, userProfile.display_name as string);
@@ -219,15 +237,17 @@ export async function POST(req: Request) {
     const genderStr = character.gender && character.gender !== "Not specified" ? `\nGender: ${character.gender}` : "";
 
     // --- Consolidate system prompt ---
-    const block1 = `Identity:\nYou are ${character.name}.${genderStr}\n${charBackstory}\n${charMemories}${factsList}`.trim();
+    const block1 = `[IDENTITY]\nYou are ${character.name}.${genderStr}\n${charBackstory}\n${charMemories}${factsList}`.trim();
     
-    const block2 = `Context & History:\n${charScenario}\n[Relationship: ${getTierName(tier)} (Level ${currentLevel})]\n${tierDirective}\n${session.global_summary ? `[Previous Summary: ${session.global_summary}]` : ""}\n${session.current_state ? `[Current State: ${session.current_state}]` : ""}`.trim();
+    const block2 = `[CONTEXT & HISTORY]\nScenario: ${charScenario}\nRelationship: ${getTierName(tier)} (Level ${currentLevel})\n${tierDirective}\n${session.global_summary ? `Previous Summary: ${session.global_summary}\n` : ""}${session.current_state ? `Current State: ${session.current_state}` : ""}`.trim();
     
-    const block3 = `User Profile:\n${userInfoParts.join(" ")}\nStyle: ${userProfile?.response_style || "Normal"}`.trim();
+    const block3 = `[USER PROFILE]\n${userInfoParts.join(" ")}\nStyle: ${userProfile?.response_style || "Normal"}`.trim();
     
-    const block4 = `Directives:\n${charDirectives}\n${charExample}\n${finalResponseInstructions}`.trim();
+    const block4 = `[SYSTEM INSTRUCTIONS]\n${charDirectives}\n\n${finalResponseInstructions}`.trim();
 
-    const systemPrompt = [block1, block2, block3, block4].join("\n\n");
+    const block5 = charExample ? `[EXAMPLE DIALOGUE]\n${charExample}`.trim() : "";
+
+    const systemPrompt = [block1, block2, block3, block4, block5].filter(Boolean).join("\n\n");
 
     // 4. Save user message to DB or handle regeneration cleanup
     let userText = "";
