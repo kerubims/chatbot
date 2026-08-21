@@ -14,18 +14,17 @@ export async function updateStateAsync(
 
     const endpointUrl = `${NOVITA_SERVERLESS_BASE_URL}/chat/completions`;
 
-    // A very tiny, highly specific prompt optimized for minimum token usage
-    const systemPrompt = `You are a state tracker. Your ONLY job is to output a JSON object containing the current physical state of the characters based on the recent exchange.
-KEYS REQUIRED: "state" (string).
-Keep the state string under 30 words. Include: Location, Time, Character's clothing, User's clothing, Posture/Status.
+    const systemPrompt = `You are a strict State Tracker for a roleplay. Output a JSON object with one key: "state" (string).
 
-[Previous State]
-${currentState || "None"}
+[Current State]
+${currentState || "Not established"}
 
-Rules: 
-1. If the recent exchange shows a change (e.g. taking off clothes, moving), UPDATE the state.
-2. If nothing changed, return the Previous State exactly as it was.
-3. Output RAW JSON only. No markdown formatting.`;
+RULES:
+1. Analyze the recent exchange for CLEAR, EXPLICIT changes in the scene. This includes: changing location, time skips, changes in clothing/posture, or NEW CHARACTERS arriving/leaving (e.g., a 3rd party enters the scene).
+2. If YES, update the [Current State] to reflect the new reality. Keep it under 40 words. Focus on: Location, Time, Actors Present, and major physical states.
+3. If NO (they are just talking or doing minor actions), you MUST output the EXACT SAME [Current State] string. 
+4. DO NOT guess, infer, or hallucinate details that are not explicitly stated in the recent exchange.
+5. Return ONLY valid JSON. No markdown blocks, no extra text.`;
 
     const payload = {
       model: DEFAULT_MODEL,

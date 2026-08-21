@@ -3,14 +3,14 @@
 export const LEVEL_THRESHOLDS: Record<number, number> = {
   1: 0,     // Start
   2: 100,   // Acquaintance
-  3: 250,   // Familiar
-  4: 500,   // Close Friend
-  5: 800,   // Trusted
-  6: 1200,  // Intimate
-  7: 1700,  // Deep Bond
-  8: 2300,  // Devoted
-  9: 3000,  // Soulmate
-  10: 4000, // Unbreakable
+  3: 200,   // Familiar
+  4: 300,   // Close Friend
+  5: 400,   // Trusted
+  6: 500,   // Intimate
+  7: 600,   // Deep Bond
+  8: 700,   // Devoted
+  9: 800,   // Soulmate
+  10: 1000, // Unbreakable
 };
 
 export const MAX_LEVEL = 10;

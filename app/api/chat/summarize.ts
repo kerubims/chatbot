@@ -1,6 +1,8 @@
 import { prisma } from "@/lib/prisma";
 import { DEFAULT_MODEL, NOVITA_SERVERLESS_BASE_URL } from "@/lib/novita";
 import { fetchWithRetry } from "@/lib/retry";
+import { generateEmbedding } from "@/lib/embeddings";
+import { supabase } from "@/lib/supabase";
 import * as fs from "fs";
 
 export async function generateAutoSummary(
@@ -30,7 +32,10 @@ export async function generateAutoSummary(
 You MUST output your response as a valid JSON object with EXACTLY these 3 keys:
 1. "chapter_summary": A detailed narrative summary of ONLY the provided chat history (1-2 paragraphs). Focus on key events, actions, emotional turning points, and dialogue.
 2. "global_summary": A highly condensed, rolling summary of the ENTIRE story from the beginning.
-3. "new_facts": An array of strings containing ONLY permanent NEW facts established in this chat history (e.g. items obtained/lost, secrets revealed, promises made, specific new locations discovered). If there are none, return an empty array []. Keep facts concise.
+3. "new_facts": An array of strings containing ONLY permanent NEW facts established in this chat history. 
+   - Extract ANY new lore, character traits (fears, desires, physical traits), secrets revealed, items obtained, or major plot decisions. 
+   - Be thorough. Do NOT miss important details. If absolutely nothing new is learned, return [].
+   - CRITICAL RULE: Each fact MUST be strictly under 15 words. Extremely dense and concise. No conversational fluff.
 
 ${existingGlobalSummary ? `[Previous Global Summary]\n${existingGlobalSummary}\n\nCombine this with the new events to form the new global_summary.` : "Since there is no previous global summary, the global_summary will just summarize the current events."}
 
@@ -38,7 +43,7 @@ Example JSON format:
 {
   "chapter_summary": "User and Character went to the park and talked about their past. Character revealed a secret.",
   "global_summary": "User and Character met at the cafe, then went to the park where Character revealed a secret about their past.",
-  "new_facts": ["User and Character agreed to go to the park", "Character revealed they have a fear of dogs"]
+  "new_facts": ["Agreed to visit the old abandoned park", "Sarah revealed she has a fear of large dogs"]
 }
 Do NOT wrap the JSON in markdown blocks. Output raw JSON only.`;
 
@@ -119,20 +124,34 @@ Do NOT wrap the JSON in markdown blocks. Output raw JSON only.`;
       })
     ];
 
-    // Add facts creation to the transaction if there are new facts
+    // Add facts creation to Supabase Vector DB if there are new facts
     if (newFacts.length > 0) {
-      const factRecords = newFacts.map(fact => ({
-        session_id: sessionId,
-        fact: fact
-      }));
-      transactions.push(
-        prisma.characterFact.createMany({
-          data: factRecords
-        })
-      );
+      console.log(`[Auto-Summary] Generating embeddings for ${newFacts.length} new facts...`);
+      const factRecords = [];
+      for (const fact of newFacts) {
+        try {
+          const embedding = await generateEmbedding(fact);
+          factRecords.push({
+            session_id: sessionId,
+            fact: fact,
+            embedding: embedding
+          });
+        } catch (err) {
+          console.error("[Auto-Summary] Failed to generate embedding for fact:", fact, err);
+        }
+      }
+
+      if (factRecords.length > 0) {
+        const { error } = await supabase.from('character_facts').insert(factRecords);
+        if (error) {
+          console.error("[Auto-Summary] Failed to insert facts to Supabase:", error);
+        } else {
+          console.log(`[Auto-Summary] Successfully inserted ${factRecords.length} facts to Supabase.`);
+        }
+      }
     }
 
-    // Use transaction to ensure all records are saved safely
+    // Use transaction to ensure MySQL records are saved safely
     await prisma.$transaction(transactions);
 
     console.log(`[Auto-Summary] Generated Chapter ${chapterCount + 1} and updated global state for session ${sessionId}`);

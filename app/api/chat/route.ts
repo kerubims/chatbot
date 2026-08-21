@@ -12,6 +12,8 @@ import { generateAutoSummary } from "./summarize";
 import { rateLimit } from "@/lib/rate-limit";
 import { fetchWithRetry } from "@/lib/retry";
 import { updateStateAsync } from "@/lib/state-tracker";
+import { generateEmbedding } from "@/lib/embeddings";
+import { supabase } from "@/lib/supabase";
 import * as fs from "fs";
 
 export const maxDuration = 60;
@@ -55,13 +57,14 @@ export async function POST(req: Request) {
       );
     }
 
-    const { messages, sessionId, characterId, temperature, model, isRegenerate, messageIdToReplace } = (await req.json()) as {
+    const { messages, sessionId, characterId, temperature, model, isRegenerate, isEdit, messageIdToReplace } = (await req.json()) as {
       messages: UIMessage[];
       sessionId: string;
       characterId: string;
       temperature?: number;
       model?: string;
       isRegenerate?: boolean;
+      isEdit?: boolean;
       messageIdToReplace?: string;
     };
 
@@ -69,8 +72,7 @@ export async function POST(req: Request) {
     const [character, session, userProfile] = await Promise.all([
       prisma.character.findUnique({ where: { id: characterId } }),
       prisma.chatSession.findUnique({ 
-        where: { id: sessionId },
-        include: { facts: true }
+        where: { id: sessionId }
       }),
       prisma.userProfile.findUnique({ where: { id: SINGLETON_USER_ID } }),
     ]);
@@ -84,6 +86,43 @@ export async function POST(req: Request) {
     const currentExp = session.affinity_exp ?? 0;
     const tier = getTier(session.affinity_level);
     const tierDirective = getTierDirective(tier);
+
+    // --- RAG: Vector Search for Facts & Lore ---
+    // Extract the last 3 messages for context (the "sweet spot")
+    const recentContextMessages = messages.slice(-3).map(m => `${m.role === 'user' ? 'User' : character.name}: ${m.content || (m.parts?.find(p => p.type === 'text') as any)?.text || ''}`).join('\n');
+    let ragFacts: string[] = [];
+    
+    if (recentContextMessages) {
+      try {
+        const queryEmbedding = await generateEmbedding(recentContextMessages);
+        
+        // Match facts
+        const { data: matchedFacts, error: factsError } = await supabase.rpc('match_facts', {
+          query_embedding: queryEmbedding,
+          match_threshold: 0.2,
+          match_count: 5,
+          p_session_id: sessionId
+        });
+        
+        if (!factsError && matchedFacts) {
+          ragFacts = matchedFacts.map((f: any) => f.fact);
+        }
+
+        // Match lore
+        const { data: matchedLore, error: loreError } = await supabase.rpc('match_lore', {
+          query_embedding: queryEmbedding,
+          match_threshold: 0.2,
+          match_count: 5,
+          p_character_id: characterId
+        });
+
+        if (!loreError && matchedLore) {
+          ragFacts = [...ragFacts, ...matchedLore.map((l: any) => l.lore_text)];
+        }
+      } catch (err) {
+        console.error("RAG Error:", err);
+      }
+    }
 
     // 3. Build the enriched multi-layer system prompt
     const systemPromptParts: string[] = [];
@@ -147,7 +186,8 @@ export async function POST(req: Request) {
 5. Keep *action narration* extremely brief (1 short sentence max). Focus heavily on dialogue.
 6. Let the User drive the action. Do not fast-forward or speak for the User.
 7. Avoid purple prose, repetitive actions, and overly poetic descriptions. Be concise and natural.
-8. Plain text output only. No JSON.`;
+8. Multi-Character Awareness: The User may introduce or roleplay as third-party characters (e.g., *her husband approaches*). If a third-party character speaks or acts, you MUST recognize them as a separate entity from the main User and respond to THEM appropriately in context. Do not confuse third-party characters with the main User.
+9. Plain text output only. No JSON.`;
 
     let finalResponseInstructions = responseInstructions;
     if (isRegenerate) {
@@ -172,8 +212,8 @@ export async function POST(req: Request) {
       charExample = replaceUser(charExample);
     }
 
-    const factsList = session.facts && session.facts.length > 0 
-      ? "\n[Permanent Memories / Facts]\n" + session.facts.map((f: any) => `- ${f.fact}`).join("\n")
+    const factsList = ragFacts.length > 0 
+      ? "\n[Relevant Memories / World Lore]\n" + ragFacts.map((f: any) => `- ${f}`).join("\n")
       : "";
     const genderStr = character.gender && character.gender !== "Not specified" ? `\nGender: ${character.gender}` : "";
 
@@ -196,12 +236,33 @@ export async function POST(req: Request) {
         (lastUserMessage.parts?.find((p: any) => p.type === "text") as any)?.text || "";
     }
 
-    if (isRegenerate && messageIdToReplace) {
+    let deletedCount = 0;
+    if ((isRegenerate || isEdit) && messageIdToReplace) {
       const targetMessage = await prisma.message.findUnique({
         where: { id: messageIdToReplace }
       });
       if (targetMessage) {
-        await prisma.message.deleteMany({
+        // Delete messages from target onwards
+        const deleted = await prisma.message.deleteMany({
+          where: {
+            session_id: sessionId,
+            created_at: {
+              gte: targetMessage.created_at
+            }
+          }
+        });
+        deletedCount = deleted.count;
+
+        // Delete any Long-term memory (StoryChapter, CharacterFact) generated after target
+        await prisma.storyChapter.deleteMany({
+          where: {
+            session_id: sessionId,
+            created_at: {
+              gte: targetMessage.created_at
+            }
+          }
+        });
+        await prisma.characterFact.deleteMany({
           where: {
             session_id: sessionId,
             created_at: {
@@ -210,7 +271,9 @@ export async function POST(req: Request) {
           }
         });
       }
-    } else {
+    }
+
+    if (!isRegenerate) {
       if (userText) {
         await prisma.message.create({
           data: { session_id: sessionId, role: "user", content: userText },
@@ -352,7 +415,14 @@ export async function POST(req: Request) {
             currentExp,
             expChange
           );
-          const newMsgCount = currentMsgCount + 2;
+          
+          let netChange = 2; // Normal chat adds 1 user + 1 assistant
+          if (isRegenerate) {
+            netChange = 1 - deletedCount; // +1 assistant, -deleted
+          } else if (isEdit) {
+            netChange = 2 - deletedCount; // +1 user, +1 assistant, -deleted
+          }
+          const newMsgCount = Math.max(0, currentMsgCount + netChange);
 
           // Calculate cost
           const cost = (usageData.prompt_tokens + usageData.completion_tokens) * COST_PER_TOKEN;

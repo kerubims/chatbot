@@ -11,6 +11,7 @@ interface ChatMessageProps {
   isStreaming?: boolean;
   isRegenerating?: boolean;
   onRegenerate?: (id: string) => void;
+  onEdit?: (id: string, newContent: string) => void;
 }
 
 export default function ChatMessage({
@@ -22,6 +23,7 @@ export default function ChatMessage({
   isStreaming,
   isRegenerating,
   onRegenerate,
+  onEdit,
 }: ChatMessageProps) {
   const [translatedText, setTranslatedText] = useState<string | null>(null);
   const [isTranslating, setIsTranslating] = useState(false);
@@ -71,8 +73,21 @@ export default function ChatMessage({
 
   if (role === "user") {
     return (
-      <div className="flex justify-end animate-fade-in">
-        <div className="chat-bubble-user">
+      <div className="flex justify-end animate-fade-in group/usermsg">
+        <div className="chat-bubble-user relative">
+          {!isStreaming && onEdit && (
+            <div className="absolute -left-[2.5rem] top-1/2 -translate-y-1/2 flex items-center gap-1 opacity-100 md:opacity-0 md:group-hover/usermsg:opacity-100 transition-opacity">
+              <button
+                onClick={() => onEdit(id, content)}
+                title="Edit"
+                className="p-1.5 rounded-full text-white/50 hover:text-white hover:bg-white/10 transition-colors active:scale-95 flex items-center justify-center backdrop-blur-sm"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
+                </svg>
+              </button>
+            </div>
+          )}
           <div className="whitespace-pre-wrap">{formatContent(content)}</div>
         </div>
       </div>

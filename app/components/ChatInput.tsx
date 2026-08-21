@@ -71,6 +71,36 @@ export default function ChatInput({ onSend, disabled, isStreaming, onSuggest, is
     }
   };
 
+  const inputRef = useRef(input);
+  useEffect(() => {
+    inputRef.current = input;
+  }, [input]);
+
+  useEffect(() => {
+    const handleRequestTranslate = async () => {
+      const currentInput = inputRef.current;
+      if (!currentInput.trim() || isStreaming) return;
+      window.dispatchEvent(new Event("translateStart"));
+      try {
+        const res = await fetch("/api/translate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: currentInput, from: "id", to: "en" }),
+        });
+        const data = await res.json();
+        if (data.translatedText) {
+          setInput(data.translatedText);
+        }
+      } catch (err) {
+        console.error("Translation failed", err);
+      } finally {
+        window.dispatchEvent(new Event("translateEnd"));
+      }
+    };
+    window.addEventListener("requestTranslateInput", handleRequestTranslate as EventListener);
+    return () => window.removeEventListener("requestTranslateInput", handleRequestTranslate as EventListener);
+  }, [isStreaming]);
+
   // Listen to a custom event to set input from outside (for suggestions)
   useEffect(() => {
     const handleSetInput = (e: CustomEvent<string>) => {

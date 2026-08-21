@@ -61,6 +61,7 @@ export default function ChatPage({
   const [affinityExp, setAffinityExp] = useState(0);
   const [toastExp, setToastExp] = useState<number | null>(null);
   const [showLevelUp, setShowLevelUp] = useState<number | null>(null);
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   
   // Usage / Token Tracking State
   const [usage, setUsage] = useState<UsageStats>({
@@ -85,6 +86,25 @@ export default function ChatPage({
   
   // Mobile sidebar
   const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  // Translate Input State
+  const [isTranslatingInput, setIsTranslatingInput] = useState(false);
+
+  useEffect(() => {
+    const handleTranslateStart = () => setIsTranslatingInput(true);
+    const handleTranslateEnd = () => setIsTranslatingInput(false);
+    window.addEventListener("translateStart", handleTranslateStart);
+    window.addEventListener("translateEnd", handleTranslateEnd);
+    return () => {
+      window.removeEventListener("translateStart", handleTranslateStart);
+      window.removeEventListener("translateEnd", handleTranslateEnd);
+    }
+  }, []);
+
+  const handleTranslateInput = () => {
+    if (isTranslatingInput) return;
+    window.dispatchEvent(new Event("requestTranslateInput"));
+  };
 
   // Rate limit countdown timer
   useEffect(() => {
@@ -361,6 +381,13 @@ export default function ChatPage({
   const handleSendMessage = async (text: string) => {
     if (!activeSessionId || isStreaming) return;
     
+    if (editingMessageId) {
+      const id = editingMessageId;
+      setEditingMessageId(null);
+      await handleEditMessage(id, text);
+      return;
+    }
+
     setError(null);
     setRateLimitCountdown(null);
     setIsStreaming(true);
@@ -499,6 +526,169 @@ export default function ChatPage({
       console.error("Gagal mengirim pesan", err);
       setError(err);
       // Remove the placeholder if error
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === assistantId
+            ? { ...m, isStreaming: false, content: m.content || "" }
+            : m
+        )
+      );
+    } finally {
+      setIsStreaming(false);
+    }
+  };
+
+  const handleEditRequest = (messageId: string, content: string) => {
+    setEditingMessageId(messageId);
+    window.dispatchEvent(new CustomEvent("setChatInput", { detail: content }));
+  };
+
+  const handleEditMessage = async (messageId: string, newContent: string) => {
+    if (!activeSessionId || isStreaming) return;
+    
+    setError(null);
+    setRateLimitCountdown(null);
+    setIsStreaming(true);
+
+    const targetIndex = messages.findIndex((m) => m.id === messageId);
+    if (targetIndex === -1) {
+      setIsStreaming(false);
+      return;
+    }
+
+    // Keep messages before the target message
+    const updatedMessages = messages.slice(0, targetIndex);
+    
+    // Append the edited user message
+    const editedUserMessage = {
+      id: messageId, // keep the same ID for UI placeholder
+      role: "user",
+      content: newContent,
+      createdAt: new Date(),
+    };
+    updatedMessages.push(editedUserMessage);
+
+    setMessages(updatedMessages);
+    setSuggestions([]);
+    setShowSuggestions(false);
+
+    // Create a placeholder assistant message for streaming
+    const assistantId = (Date.now() + 1).toString();
+    const assistantMessage = {
+      id: assistantId,
+      role: "assistant",
+      content: "",
+      createdAt: new Date(),
+      isStreaming: true,
+      isRegenerating: true,
+    };
+    setMessages((prev) => [...prev, assistantMessage]);
+
+    try {
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: updatedMessages,
+          characterId,
+          sessionId: activeSessionId,
+          temperature,
+          model: selectedModel,
+          isEdit: true,
+          messageIdToReplace: messageId,
+        }),
+      });
+
+      // Handle rate limiting
+      if (res.status === 429) {
+        const data = await res.json();
+        setRateLimitCountdown(data.retryAfter || 60);
+        setMessages((prev) => prev.filter((m) => m.id !== assistantId));
+        setIsStreaming(false);
+        return;
+      }
+
+      if (!res.ok) {
+        throw new Error(await res.text());
+      }
+
+      // Read SSE stream
+      const reader = res.body!.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed || !trimmed.startsWith("data: ")) continue;
+
+          try {
+            const event = JSON.parse(trimmed.slice(6));
+
+            if (event.type === "token") {
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === assistantId
+                    ? { ...m, content: m.content + event.content }
+                    : m
+                )
+              );
+            } else if (event.type === "done") {
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === assistantId
+                    ? { ...m, id: event.db_id || m.id, content: event.reply, isStreaming: false }
+                    : m
+                )
+              );
+
+              setAffinityLevel(event.affinity_level);
+              setAffinityExp(event.affinity_exp);
+
+              if (event.exp_change !== 0) {
+                setToastExp(event.exp_change);
+              }
+              if (event.leveledUp) {
+                setShowLevelUp(event.affinity_level);
+              }
+
+              if (event.usage) {
+                setUsage((prev) => {
+                  const newUsage = {
+                    promptTokens: prev.promptTokens + event.usage.prompt_tokens,
+                    completionTokens: prev.completionTokens + event.usage.completion_tokens,
+                    totalCost: prev.totalCost + (event.cost || 0),
+                    lastChatTokens: event.usage.total_tokens || 0,
+                  };
+                  setSessions((sPrev) => sPrev.map(s => s.id === activeSessionId ? {
+                    ...s,
+                    total_prompt_tokens: newUsage.promptTokens,
+                    total_completion_tokens: newUsage.completionTokens,
+                    total_cost_usd: newUsage.totalCost
+                  } : s));
+                  return newUsage;
+                });
+              }
+            } else if (event.type === "error") {
+              throw new Error(event.message);
+            }
+          } catch (parseErr: any) {
+            if (parseErr.message && !trimmed.includes('"type":"token"')) {
+              console.warn("SSE parse issue:", parseErr.message);
+            }
+          }
+        }
+      }
+    } catch (err: any) {
+      console.error("Gagal mengirim pesan", err);
+      setError(err);
       setMessages((prev) =>
         prev.map((m) =>
           m.id === assistantId
@@ -709,6 +899,7 @@ export default function ChatPage({
               isStreaming={msg.isStreaming}
               isRegenerating={msg.isRegenerating}
               onRegenerate={msg.role === "assistant" ? handleRegenerate : undefined}
+              onEdit={msg.role === "user" ? handleEditRequest : undefined}
             />
           ))}
           {isStreaming && messages[messages.length - 1]?.content === "" && (
@@ -754,6 +945,22 @@ export default function ChatPage({
               style={{ backgroundColor: "#9b8b98" }}
             >
               <span>📖</span> Story Journal
+            </button>
+            <button
+              onClick={handleTranslateInput}
+              disabled={isTranslatingInput}
+              className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-[14px] text-[12px] font-medium whitespace-nowrap text-white transition-transform active:scale-95 shadow-sm"
+              style={{ backgroundColor: "#9b8b98", opacity: isTranslatingInput ? 0.5 : 1 }}
+            >
+              {isTranslatingInput ? (
+                <svg className="animate-spin w-3.5 h-3.5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+              ) : (
+                <span>🌐</span>
+              )}
+              {isTranslatingInput ? "Translating..." : "EN"}
             </button>
             <button
               onClick={() => setShowTokenModal(true)}
@@ -804,6 +1011,21 @@ export default function ChatPage({
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className={isLoadingSuggestions ? "animate-spin" : ""}>
                   <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.59-9.21l5.67-5.67"/>
                 </svg>
+              </button>
+            </div>
+          )}
+
+          {editingMessageId && (
+            <div className="flex items-center justify-between bg-[var(--accent-primary)]/10 text-[var(--accent-primary)] px-3 py-1.5 rounded-t-[14px] text-xs font-medium -mb-3 z-0 border border-[var(--accent-primary)]/20 border-b-0 relative top-1">
+              <span>Editing message...</span>
+              <button 
+                onClick={() => {
+                  setEditingMessageId(null);
+                  window.dispatchEvent(new CustomEvent("setChatInput", { detail: "" }));
+                }}
+                className="hover:text-white transition-colors px-2 py-0.5"
+              >
+                Cancel
               </button>
             </div>
           )}
