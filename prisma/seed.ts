@@ -35,10 +35,12 @@ try {
 async function main() {
   console.log('Start seeding...');
   
-  // Hapus data lama agar tidak duplikat jika dijalankan berkali-kali
-  await prisma.message.deleteMany();
-  await prisma.chatSession.deleteMany();
-  await prisma.character.deleteMany();
+  // Periksa apakah database sudah memiliki data karakter
+  const characterCount = await prisma.character.count();
+  if (characterCount > 0) {
+    console.log(`Database sudah memiliki ${characterCount} karakter. Melewati proses seeding agar history chat tidak hilang.`);
+    return;
+  }
   
   for (const char of characters) {
     const character = await prisma.character.create({
