@@ -12,12 +12,22 @@ export const viewport: Viewport = {
   initialScale: 1,
   maximumScale: 1,
   viewportFit: "cover",
+  themeColor: "#0a0a0f",
 };
 
 export const metadata: Metadata = {
-  title: "Roleplay AI — Personal Character Chat",
+  title: "UChat — Personal Character Chat",
+  applicationName: "UChat",
   description:
     "Immersive AI roleplay platform with custom characters, contextual memory, and streaming responses.",
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "default",
+    title: "UChat",
+  },
+  formatDetection: {
+    telephone: false,
+  },
 };
 
 export default function RootLayout({
